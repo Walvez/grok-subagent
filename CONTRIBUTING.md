@@ -24,7 +24,7 @@ Never commit authentication files, captured tokens, private prompts, or test rep
 - Keep changes focused.
 - Explain the behavior and trust-boundary impact.
 - Add or update tests for protocol and lifecycle changes.
-- Update both English and Chinese documentation when user-facing behavior changes.
+- Update both `README.md` (Chinese) and `README.en.md` (English) when user-facing behavior changes.
 - Run `npm test` before opening the pull request.
 - Do not weaken the linked-worktree requirement without a documented replacement providing at least equivalent isolation.
 
