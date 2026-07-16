@@ -1,0 +1,20 @@
+{
+  "name": "grok-subagent",
+  "interface": {
+    "displayName": "Grok Subagent"
+  },
+  "plugins": [
+    {
+      "name": "grok-subagent",
+      "source": {
+        "source": "local",
+        "path": "./plugins/grok-subagent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "grok-subagent",
+  "version": "0.1.0",
+  "description": "Run authenticated Grok Build agents as controlled external subagents from Codex.",
+  "author": {
+    "name": "Walvez"
+  },
+  "license": "MIT",
+  "keywords": ["grok", "subagent", "mcp", "acp", "coding-agent"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Grok Subagent",
+    "shortDescription": "Delegate bounded work to Grok Build agents.",
+    "longDescription": "Let Codex start, steer, inspect, cancel, and close authenticated Grok Build ACP sessions with enforced read-only or isolated-worktree sandboxes.",
+    "developerName": "Walvez",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Ask Grok to investigate this project independently.",
+      "Have Grok review my current implementation plan.",
+      "Run a Grok worker in an isolated worktree."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

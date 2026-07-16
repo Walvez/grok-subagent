@@ -1,0 +1,14 @@
+{
+  "name": "grok-subagent-codex-marketplace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Codex plugin that delegates bounded work to the official Grok Build CLI over ACP.",
+  "scripts": {
+    "test": "node --check plugins/grok-subagent/mcp-server/server.mjs && node plugins/grok-subagent/tests/mcp-smoke.mjs && node tests/validate-repo.mjs",
+    "test:e2e": "node plugins/grok-subagent/tests/mcp-e2e.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

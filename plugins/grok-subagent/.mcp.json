@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "grok-subagent": {
+      "command": "node",
+      "args": ["./mcp-server/server.mjs"],
+      "cwd": "."
+    }
+  }
+}

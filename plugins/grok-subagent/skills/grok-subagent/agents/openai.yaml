@@ -1,0 +1,11 @@
+interface:
+  display_name: "Grok Subagent"
+  short_description: "Delegate bounded coding work to Grok agents"
+  default_prompt: "Use $grok-subagent to ask Grok for an independent read-only investigation."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "grok-subagent"
+      description: "Local bridge to authenticated Grok Build ACP agents"
+policy:
+  allow_implicit_invocation: true
