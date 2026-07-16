@@ -2,15 +2,28 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, lstatSync, statSync } from "node:fs";
+import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const MAX_AGENTS = 3;
+const MAX_RETAINED_FAILED_AGENTS = 3;
 const MAX_TEXT = 120_000;
 const MAX_STDERR = 12_000;
+const CANCEL_TIMEOUT_MS = 10_000;
+const SUPPORTED_MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+const CHILD_ENV_KEYS = [
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
+  "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR",
+  "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR",
+  "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+  "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+  "https_proxy", "http_proxy", "all_proxy", "no_proxy",
+  "__CF_USER_TEXT_ENCODING", "XAI_API_KEY"
+];
 const agents = new Map();
 
 const TOOL_DEFINITIONS = [
@@ -29,7 +42,7 @@ const TOOL_DEFINITIONS = [
       required: ["task", "cwd"],
       additionalProperties: false
     },
-    annotations: { title: "Start read-only Grok agent", readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    annotations: { title: "Start project-read-only Grok agent", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   },
   {
     name: "grok_spawn_worker",
@@ -74,11 +87,16 @@ const TOOL_DEFINITIONS = [
     description: "Send a focused follow-up prompt to an idle Grok agent in the same ACP session.",
     inputSchema: {
       type: "object",
-      properties: { agent_id: { type: "string" }, message: { type: "string" }, timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 } },
+      properties: {
+        agent_id: { type: "string" },
+        message: { type: "string" },
+        timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 },
+        confirm_write_scope: { type: "boolean", description: "Required for follow-ups to writing agents after explicit user authorization for the same scope." }
+      },
       required: ["agent_id", "message"],
       additionalProperties: false
     },
-    annotations: { title: "Follow up with Grok", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    annotations: { title: "Follow up with Grok", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   },
   {
     name: "grok_cancel",
@@ -90,7 +108,7 @@ const TOOL_DEFINITIONS = [
     name: "grok_close",
     description: "Terminate a Grok agent process and remove it from the bridge.",
     inputSchema: objectWithAgentId(),
-    annotations: { title: "Close Grok agent", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+    annotations: { title: "Close Grok agent", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
   },
   {
     name: "grok_list",
@@ -115,8 +133,12 @@ function clamp(value, min, max, fallback) {
 
 function cleanText(value) {
   return String(value ?? "")
-    .replace(/(authorization|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password)(\s*[:=]\s*)[^\s,;]+/gi, "$1$2[REDACTED]")
-    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]");
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]")
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+\/-]+=*/gi, "$1[REDACTED]")
+    .replace(/(authorization|api[-_ ]?key|client[-_ ]?secret|access[-_ ]?token|refresh[-_ ]?token|password|cookie|token)(\s*["']?\s*[:=]\s*["']?)[^\s,"';}]+/gi, "$1$2[REDACTED]")
+    .replace(/\b(?:sk|xai)-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED TOKEN]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED GITHUB TOKEN]")
+    .replace(/\bAKIA[A-Z0-9]{16}\b/g, "[REDACTED AWS ACCESS KEY]");
 }
 
 function appendBounded(current, addition, max = MAX_TEXT) {
@@ -130,24 +152,46 @@ function absoluteDirectory(input, label) {
   const path = resolve(input);
   accessSync(path, constants.R_OK);
   if (!statSync(path).isDirectory()) throw new Error(`${label} must be a directory.`);
-  return path;
+  return realpathSync(path);
 }
 
 function assertLinkedWorktree(input) {
   const path = absoluteDirectory(input, "worktree");
-  const probe = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const probe = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 5_000, env: buildChildEnv() });
   if (probe.status !== 0) throw new Error("Writing agents require a valid Git linked worktree.");
-  if (resolve(probe.stdout.trim()) !== path) throw new Error("worktree must be the root of the linked Git worktree.");
+  const gitRoot = realpathSync(resolve(probe.stdout.trim()));
+  if (gitRoot !== path) throw new Error("worktree must be the root of the linked Git worktree.");
   let marker;
   try { marker = lstatSync(join(path, ".git")); } catch { throw new Error("Writing agents require a linked Git worktree with a .git file."); }
   if (!marker.isFile()) throw new Error("Primary checkouts are rejected. Create a linked Git worktree, whose .git entry is a file.");
   return path;
 }
 
+function buildChildEnv(source = process.env) {
+  const env = {};
+  for (const key of CHILD_ENV_KEYS) {
+    if (source[key] !== undefined) env[key] = source[key];
+  }
+  const extraKeys = String(source.GROK_PASSTHROUGH_ENV || "")
+    .split(",")
+    .map(key => key.trim())
+    .filter(key => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+  for (const key of extraKeys) {
+    if (source[key] !== undefined) env[key] = source[key];
+  }
+  return env;
+}
+
+function negotiateProtocolVersion(requested) {
+  return SUPPORTED_MCP_PROTOCOL_VERSIONS.includes(requested)
+    ? requested
+    : SUPPORTED_MCP_PROTOCOL_VERSIONS[0];
+}
+
 function findGrok() {
   const candidates = [process.env.GROK_BIN, join(homedir(), ".grok", "bin", "grok"), "grok"].filter(Boolean);
   for (const candidate of candidates) {
-    const probe = spawnSync(candidate, ["--version"], { encoding: "utf8" });
+    const probe = spawnSync(candidate, ["--version"], { encoding: "utf8", timeout: 5_000, env: buildChildEnv() });
     if (probe.status === 0) return candidate;
   }
   throw new Error("Grok CLI was not found. Install and authenticate Grok Build first.");
@@ -173,6 +217,7 @@ class GrokAgent {
     this.requestId = 0;
     this.pending = new Map();
     this.turnPromise = null;
+    this.cancelTimer = null;
     this.closed = false;
   }
 
@@ -180,7 +225,7 @@ class GrokAgent {
     const binary = findGrok();
     const sandbox = this.mode === "readonly" ? "read-only" : "workspace";
     const args = ["--no-auto-update", "--sandbox", sandbox, "agent", "--model", this.model, "--always-approve", "--no-leader", "stdio"];
-    this.proc = spawn(binary, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: process.env });
+    this.proc = spawn(binary, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: buildChildEnv() });
     this.proc.stderr.setEncoding("utf8");
     this.proc.stderr.on("data", chunk => { this.stderr = appendBounded(this.stderr, chunk, MAX_STDERR); });
     this.proc.on("exit", (code, signal) => this.onExit(code, signal));
@@ -246,7 +291,7 @@ class GrokAgent {
 
   handleAgentRequest(message) {
     const options = message.params?.options || [];
-    const allowed = options.find(option => ["allow_once", "allow", "approved"].includes(option.kind)) || options[0];
+    const allowed = options.find(option => ["allow_once", "allow", "approved"].includes(option.kind));
     if (message.method.includes("permission") && allowed) {
       this.write({ jsonrpc: "2.0", id: message.id, result: { outcome: { outcome: "selected", optionId: allowed.optionId } } });
     } else {
@@ -272,32 +317,61 @@ class GrokAgent {
   }
 
   runTurn(prompt, timeoutSeconds = this.timeoutSeconds) {
-    if (this.status !== "idle" && this.status !== "completed") throw new Error(`Agent is ${this.status}; wait or cancel before sending another prompt.`);
+    if (this.status !== "idle" && this.status !== "completed") throw new Error(`Agent is ${this.status}; wait for the current turn to settle or close it before sending another prompt.`);
     this.status = "running";
     this.error = null;
     this.touch();
     const boundedTimeout = clamp(timeoutSeconds, 30, 1800, this.timeoutSeconds) * 1000;
-    this.turnPromise = this.request("session/prompt", {
+    const turn = this.request("session/prompt", {
       sessionId: this.sessionId,
       prompt: [{ type: "text", text: cleanText(prompt) }]
     }, boundedTimeout).then(result => {
-      this.status = "completed";
+      this.clearCancelTimer();
+      this.status = this.status === "cancelling" ? "idle" : "completed";
       this.touch();
       return result;
     }).catch(error => {
-      if (this.status !== "cancelled") this.fail(error);
+      this.clearCancelTimer();
+      if (this.status === "cancelling") {
+        this.status = "idle";
+        this.touch();
+        return { stopReason: "cancelled" };
+      }
+      if (this.closed) return { stopReason: "closed" };
+      this.fail(error);
       throw error;
+    }).finally(() => {
+      if (this.turnPromise === turn) this.turnPromise = null;
     });
+    this.turnPromise = turn;
     this.turnPromise.catch(() => {});
-    return this.turnPromise;
+    return turn;
   }
 
   cancel() {
-    if (!this.sessionId || this.closed) return false;
+    if (!this.sessionId || this.closed || this.status !== "running") return false;
     this.write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: this.sessionId } });
-    this.status = "cancelled";
+    this.status = "cancelling";
     this.touch();
+    this.clearCancelTimer();
+    this.cancelTimer = setTimeout(() => {
+      if (this.status === "cancelling") this.fail(new Error("Grok cancellation timed out."));
+    }, CANCEL_TIMEOUT_MS);
+    this.cancelTimer.unref();
     return true;
+  }
+
+  clearCancelTimer() {
+    if (this.cancelTimer) clearTimeout(this.cancelTimer);
+    this.cancelTimer = null;
+  }
+
+  terminateProcess() {
+    if (!this.proc || this.proc.killed || this.proc.exitCode !== null || this.proc.signalCode !== null) return;
+    this.proc.kill("SIGTERM");
+    setTimeout(() => {
+      if (this.proc?.exitCode === null && this.proc?.signalCode === null) this.proc.kill("SIGKILL");
+    }, 1500).unref();
   }
 
   close() {
@@ -305,33 +379,34 @@ class GrokAgent {
     this.closed = true;
     this.status = "closed";
     this.touch();
+    this.clearCancelTimer();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("Grok agent closed."));
     }
     this.pending.clear();
-    if (this.proc && !this.proc.killed) {
-      this.proc.kill("SIGTERM");
-      setTimeout(() => { if (this.proc?.exitCode === null) this.proc.kill("SIGKILL"); }, 1500).unref();
-    }
+    this.terminateProcess();
   }
 
   onExit(code, signal) {
-    if (this.closed) return;
+    if (this.closed || this.status === "failed") return;
     const reason = `Grok process exited (${signal || code}).`;
     this.fail(new Error(reason));
   }
 
   fail(error) {
+    if (this.closed || this.status === "failed") return;
     this.error = cleanText(error?.message || error);
     if (this.stderr.trim()) this.error += `\n${cleanText(this.stderr.trim()).slice(-2000)}`;
     this.status = "failed";
     this.touch();
+    this.clearCancelTimer();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error(this.error));
     }
     this.pending.clear();
+    this.terminateProcess();
   }
 
   touch() { this.updatedAt = new Date().toISOString(); }
@@ -369,10 +444,12 @@ function getAgent(id) {
 }
 
 async function spawnAgent(args, mode) {
-  if (agents.size >= MAX_AGENTS) throw new Error(`At most ${MAX_AGENTS} Grok agents may be open. Close one first.`);
+  pruneFailedAgents();
+  const activeAgents = [...agents.values()].filter(agent => !["failed", "closed"].includes(agent.status));
+  if (activeAgents.length >= MAX_AGENTS) throw new Error(`At most ${MAX_AGENTS} Grok agents may be open. Close one first.`);
   if (typeof args.task !== "string" || !args.task.trim()) throw new Error("task is required.");
-  const cwd = mode === "readonly" ? absoluteDirectory(args.cwd, "cwd") : assertLinkedWorktree(args.worktree);
   if (mode === "worker" && args.confirm_write_scope !== true) throw new Error("confirm_write_scope must be true after explicit user authorization.");
+  const cwd = mode === "readonly" ? absoluteDirectory(args.cwd, "cwd") : assertLinkedWorktree(args.worktree);
   const agent = new GrokAgent({
     cwd,
     mode,
@@ -392,9 +469,20 @@ async function spawnAgent(args, mode) {
   return agent.summary(false);
 }
 
+function pruneFailedAgents() {
+  const failed = [...agents.values()]
+    .filter(agent => agent.status === "failed")
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  while (failed.length > MAX_RETAINED_FAILED_AGENTS) {
+    const agent = failed.shift();
+    agent.close();
+    agents.delete(agent.id);
+  }
+}
+
 async function waitForAgent(agent, seconds) {
   const deadline = Date.now() + clamp(seconds, 0, 30, 0) * 1000;
-  while (agent.status === "running" && Date.now() < deadline) {
+  while (["running", "cancelling"].includes(agent.status) && Date.now() < deadline) {
     await new Promise(resolvePromise => setTimeout(resolvePromise, 200));
   }
 }
@@ -411,6 +499,9 @@ async function callTool(name, args = {}) {
     }
     case "grok_send": {
       const agent = getAgent(args.agent_id);
+      if (agent.mode === "worker" && args.confirm_write_scope !== true) {
+        throw new Error("confirm_write_scope must be true for writing-agent follow-ups after explicit user authorization.");
+      }
       agent.runTurn(args.message, clamp(args.timeout_seconds, 30, 1800, 600));
       return agent.summary(false);
     }
@@ -437,41 +528,71 @@ function sendMcp(message) {
   process.stdout.write(JSON.stringify(message) + "\n");
 }
 
-const input = createInterface({ input: process.stdin });
-input.on("line", async line => {
-  let request;
-  try { request = JSON.parse(line); } catch { return; }
-  if (!Object.hasOwn(request, "id")) return;
-  try {
-    let result;
-    if (request.method === "initialize") {
-      result = {
-        protocolVersion: request.params?.protocolVersion || "2024-11-05",
-        capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "grok-subagent", version: VERSION }
-      };
-    } else if (request.method === "ping") {
-      result = {};
-    } else if (request.method === "tools/list") {
-      result = { tools: TOOL_DEFINITIONS };
-    } else if (request.method === "tools/call") {
-      try { result = textResult(await callTool(request.params?.name, request.params?.arguments || {})); }
-      catch (error) { result = textResult({ error: cleanText(error?.message || error) }, true); }
-    } else {
-      sendMcp({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } });
+function startMcpServer() {
+  const input = createInterface({ input: process.stdin });
+  input.on("line", async line => {
+    let request;
+    try { request = JSON.parse(line); }
+    catch {
+      sendMcp({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
       return;
     }
-    sendMcp({ jsonrpc: "2.0", id: request.id, result });
-  } catch (error) {
-    sendMcp({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: cleanText(error?.message || error) } });
-  }
-});
+    if (!Object.hasOwn(request, "id")) return;
+    try {
+      let result;
+      if (request.method === "initialize") {
+        result = {
+          protocolVersion: negotiateProtocolVersion(request.params?.protocolVersion),
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: "grok-subagent", version: VERSION }
+        };
+      } else if (request.method === "ping") {
+        result = {};
+      } else if (request.method === "tools/list") {
+        result = { tools: TOOL_DEFINITIONS };
+      } else if (request.method === "tools/call") {
+        try { result = textResult(await callTool(request.params?.name, request.params?.arguments || {})); }
+        catch (error) { result = textResult({ error: cleanText(error?.message || error) }, true); }
+      } else {
+        sendMcp({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Method not found" } });
+        return;
+      }
+      sendMcp({ jsonrpc: "2.0", id: request.id, result });
+    } catch (error) {
+      sendMcp({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: cleanText(error?.message || error) } });
+    }
+  });
+  input.on("close", shutdown);
+  return input;
+}
 
 function shutdown() {
   for (const agent of agents.values()) agent.close();
   agents.clear();
 }
 
-process.on("SIGINT", () => { shutdown(); process.exit(0); });
-process.on("SIGTERM", () => { shutdown(); process.exit(0); });
-process.on("exit", shutdown);
+export {
+  GrokAgent,
+  TOOL_DEFINITIONS,
+  VERSION,
+  absoluteDirectory,
+  assertLinkedWorktree,
+  buildChildEnv,
+  cleanText,
+  negotiateProtocolVersion,
+  shutdown,
+  startMcpServer
+};
+
+let isMainModule = false;
+try {
+  isMainModule = Boolean(process.argv[1])
+    && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+} catch {}
+
+if (isMainModule) {
+  startMcpServer();
+  process.on("SIGINT", () => { shutdown(); process.exit(0); });
+  process.on("SIGTERM", () => { shutdown(); process.exit(0); });
+  process.on("exit", shutdown);
+}

@@ -14,8 +14,10 @@ try {
   for (const name of ["grok_spawn_readonly", "grok_spawn_worker", "grok_status", "grok_result", "grok_send", "grok_cancel", "grok_close", "grok_list"]) {
     assert(names.includes(name), `missing ${name}`);
   }
-  assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_readonly").annotations.readOnlyHint, true);
+  assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_readonly").annotations.readOnlyHint, false);
+  assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_readonly").annotations.destructiveHint, false);
   assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_worker").annotations.destructiveHint, true);
+  assert.equal(listed.tools.find(tool => tool.name === "grok_send").annotations.destructiveHint, true);
   console.log(`MCP smoke passed (${names.length} tools).`);
 } finally {
   client.close();

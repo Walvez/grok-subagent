@@ -4,81 +4,179 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Codex Plugin](https://img.shields.io/badge/Codex-plugin-111827)](plugins/grok-subagent/.codex-plugin/plugin.json)
 
-Use the official Grok Build CLI as a controlled external subagent while Codex remains the orchestrator, decision-maker, and final verifier.
+让 Codex 通过官方 Grok Build CLI 调用 Grok 作为受控的外部子 Agent，同时由 Codex 统一负责任务编排、结论判断和最终验证。
 
-[简体中文](README.zh-CN.md) · [Architecture](ARCHITECTURE.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[English](README.en.md) · [架构说明](ARCHITECTURE.md) · [安全策略](SECURITY.md) · [参与贡献](CONTRIBUTING.md)
 
-> Community project. Not affiliated with, endorsed by, or sponsored by OpenAI or xAI. Grok and Grok Build are trademarks of xAI; Codex is a product of OpenAI.
+> 这是社区项目，与 OpenAI、xAI 均无隶属、赞助或官方背书关系。Grok 和 Grok Build 是 xAI 的商标；Codex 是 OpenAI 的产品。
 
-## What problem does this solve?
+核心能力：
 
-A Grok subscription is useful, but manually copying prompts, context, and answers between Codex and Grok wastes time and loses the benefits of an agent workflow. Browser automation and private-session-token connectors are fragile and create unnecessary account risk. Rebuilding a full coding agent on top of the xAI API duplicates work already present in Grok Build and may require separate API credentials and billing.
+- **异构模型复核**：让 Grok 独立调查、审查代码或反驳方案，再由 Codex 核验结论；
+- **完整会话管理**：支持状态查看、持续追问、结果读取、取消和关闭，而不是一次性复制答案；
+- **默认安全隔离**：调查默认只读；写入必须经过明确授权，并且只能发生在独立 linked Git worktree 中。
 
-This plugin gives Codex a small set of MCP tools that control the official `grok agent stdio` interface:
+## 60 秒快速开始
 
-- start a read-only Grok investigator;
-- start a writing worker only inside an isolated linked Git worktree;
-- inspect status, plans, and bounded tool activity;
-- retrieve the public answer;
-- send a focused follow-up;
-- cancel or close the process.
+### 1. 安装并登录 Grok Build
 
-The result is a single-control-plane workflow: Codex owns the task, Grok contributes an independent second model, and Codex verifies the result.
-
-## Why this approach is the best fit
-
-“Best” here means best for the specific goal of **using Grok as a Codex-managed subagent**, not best for every integration.
-
-| Approach | Main drawback |
-| --- | --- |
-| Copy and paste between apps | Manual context transfer, no lifecycle control, easy to lose evidence |
-| Browser automation | Fragile UI selectors, login/session risk, difficult cancellation and streaming |
-| Unofficial consumer-session connector | Depends on private endpoints or tokens and may break without notice |
-| Raw xAI API wrapper | Requires rebuilding agent tools, sessions, permissions, and often separate API setup |
-| **This plugin: official Grok CLI + ACP + MCP** | Keeps the supported Grok agent runtime and adds a narrow, auditable Codex control layer |
-
-The design is deliberately small:
-
-1. **Official integration boundary.** Grok Build officially exposes ACP over `grok agent stdio`.
-2. **Codex-native tool boundary.** A dependency-free local MCP server exposes lifecycle operations to Codex.
-3. **One orchestrator.** Grok cannot recursively spawn more agents through this bridge; Codex owns delegation depth.
-4. **Defense in depth.** Read-only work uses Grok's OS sandbox. Writing additionally requires a linked Git worktree before the process can start.
-5. **Persistent sessions.** One Grok process and ACP session can handle focused follow-ups without repeatedly rebuilding context.
-6. **No secret broker.** Authentication stays inside the official Grok CLI, using its existing cached login or supported API-key flow.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the protocol and trust boundaries.
-
-## Requirements
-
-- macOS, Linux, or WSL supported by Grok Build;
-- Node.js 18 or newer;
-- a recent Codex CLI/Desktop build with plugin support;
-- the official Grok Build CLI, authenticated locally;
-- Git when using writing workers.
-
-This project was developed and tested on macOS with Grok CLI `0.2.101`, `grok-4.5`, and a browser-authenticated SuperGrok account. Other authentication methods supported by the official CLI, including `XAI_API_KEY`, are passed through to Grok rather than handled by this plugin.
-
-Install and authenticate Grok Build first:
+需要 Node.js 22+、支持插件的新版 Codex CLI/Desktop，以及官方 Grok Build CLI。
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash
 grok
 ```
 
-Official references: [Grok Build overview](https://docs.x.ai/build/overview), [Headless & ACP](https://docs.x.ai/build/cli/headless-scripting), and [CLI reference](https://docs.x.ai/build/cli/reference).
-
-## Install in Codex
-
-Add this repository as a Git marketplace, then install the plugin:
+### 2. 安装 Codex 插件
 
 ```bash
 codex plugin marketplace add Walvez/grok-subagent
 codex plugin add grok-subagent@grok-subagent
 ```
 
-Start a **new Codex task** after installation so the new skill and MCP tools are loaded.
+安装后请**新建一个 Codex 任务**，让 Skill 和 MCP 工具进入新的任务上下文。
 
-For local development:
+### 3. 发起第一次只读调用
+
+在新任务中直接告诉 Codex：
+
+```text
+让 Grok 作为只读子 Agent 独立审查当前项目，列出最重要的三个风险，
+要求提供文件和行号证据。你负责核验后再向我报告。
+```
+
+成功时，Codex 会启动一个 Grok Agent、获得 Agent ID，并在 Grok 完成后读取结果；项目文件不会被修改。
+
+## 什么时候适合使用
+
+| 适合 | 可能不需要 |
+| --- | --- |
+| 需要不同厂商模型独立复核 | 只想向 Grok 提一个一次性问题 |
+| 审查认证、支付、权限、并发等高风险代码 | 需要同时管理许多模型和可视化面板 |
+| 从反方角度检查迁移或实施方案 | 环境不允许把相关代码或上下文发送给 xAI |
+| 在隔离 worktree 中尝试第二份实现 | 要求 Agent 会话在 Codex/MCP 重启后自动恢复 |
+
+## 工作原理
+
+```mermaid
+flowchart LR
+    U["用户"] --> C["Codex 管理员"]
+    C --> S["Grok Subagent Skill"]
+    S --> M["本地 MCP Bridge"]
+    M --> A["官方 Grok ACP: grok agent stdio"]
+    A --> R["只读项目目录"]
+    A --> W["独立 Git worktree"]
+    A --> X["xAI / Grok 服务"]
+    M --> C
+    C --> V["Codex 核验与最终结果"]
+```
+
+这个 Bridge 是编排适配器，不是另一个完整的 coding-agent 框架。认证、推理、文件和终端工具、模型会话仍由官方 Grok Build 运行时负责；Codex 决定委派什么，并验证最终结果。协议与信任边界见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+## 为什么采用这种架构
+
+| 方法 | 主要取舍 |
+| --- | --- |
+| 两边手工复制 | 上下文容易遗漏，无法统一管理状态、取消和验证 |
+| 浏览器自动化 | 页面和选择器容易变化，流式输出与会话控制较脆弱 |
+| 非官方消费者会话接口 | 依赖私有接口或凭据，兼容性与安全边界难以保证 |
+| 自行封装 xAI API | 需要重新实现工具、会话、权限和沙箱，并可能需要单独 API 配置与计费 |
+| Codex 原生子 Agent | 集成更紧密，但通常仍属于同一平台和模型体系 |
+| **本插件：官方 Grok CLI + ACP + MCP** | 保留官方 Grok Agent 运行时，只增加一层小而透明的 Codex 控制接口 |
+
+本插件不是 Codex 原生子 Agent 的替代品。原生子 Agent 更适合同平台内的并行拆分；本插件适合需要**模型多样性**时，让 Grok 提供独立意见或隔离实现，再由 Codex 统一验收。
+
+## 常用场景
+
+### 独立排查故障
+
+```text
+让 Grok 作为只读子 Agent 独立检查这个项目的登录失败问题，
+要求给出文件和行号证据。你负责核验后再下最终结论。
+```
+
+### 第二模型代码审查
+
+```text
+让 Grok 独立审查当前 diff，重点找正确性、安全性和并发问题。
+把它的结论与你自己的审查对照，只报告经过验证的问题。
+```
+
+### 反方审查实施方案
+
+```text
+让 Grok 从反方角度审查这个迁移计划，寻找回滚缺口、数据丢失风险、
+没有证据的假设和缺失测试。最后由你整理优先级。
+```
+
+### 独立 worktree 实现
+
+```text
+创建一个独立 linked Git worktree，让 Grok 在里面实现解析器修改。
+不要提交、合并或推送。完成后由你审查 diff 并运行测试。
+```
+
+写入模式必须得到用户明确授权。插件会拒绝主检出目录，也会拒绝 `.git` 不是 worktree 文件的普通目录；对写入 Agent 继续追问时，还必须再次确认没有超出已获批的写入范围。
+
+## 安全模型一览
+
+| 模式 | 文件权限 | 启动条件 | 完成后的责任 |
+| --- | --- | --- | --- |
+| 只读调查 | Grok `read-only` 沙箱 | 任意可读的绝对目录 | Codex 核验文件、命令和结论 |
+| 写入 Worker | Grok `workspace` 沙箱，仅限 linked worktree | 用户明确授权，且 Bridge 通过 worktree 检查 | Codex 检查 diff 并重新运行测试 |
+
+重要边界：
+
+- Grok 是外部模型。它读取的文件和收到的上下文可能按照你的 Grok/xAI 套餐与政策发送到 xAI；
+- 认证由官方 Grok CLI 管理。插件不持久化或独立管理凭据，也不会把凭据交给 Codex；如果存在 `XAI_API_KEY`，Bridge 只会将其传递给官方 Grok CLI 子进程；
+- 不要委派密钥、Token、生产 `.env`、SSH 私钥或无关个人资料；
+- Bridge 会过滤子进程环境，但显式放行的变量和 `XAI_API_KEY` 仍对官方 CLI 进程可见；
+- 只读沙箱阻止项目写入，但 Grok 仍可写入 `~/.grok` 和临时目录；macOS 上不能把它视为离线网络隔离；
+- 两个模型得出相同结论不等于事实已经验证，仓库内容也可能包含提示注入；
+- Bridge 不保存思维链，只在内存中保留有长度限制的公开回答、计划、工具名称/状态和脱敏错误。
+
+在私有代码上使用前，请阅读 [SECURITY.md](SECURITY.md)。
+
+## 八个管理工具
+
+| 工具 | 用途 | 文件系统模式 |
+| --- | --- | --- |
+| `grok_spawn_readonly` | 启动独立调查、审查或方案分析 | Grok `read-only` 沙箱 |
+| `grok_spawn_worker` | 在获批的 linked worktree 中执行实现任务 | Grok `workspace` 沙箱 + Bridge 检查 |
+| `grok_status` | 查看生命周期、计划和最近工具活动 | 只读 |
+| `grok_result` | 获取公开回答，可短暂等待当前轮次完成 | 只读 |
+| `grok_send` | 在同一会话中聚焦追问；写入会话需重新确认范围 | 继承会话模式 |
+| `grok_cancel` | 取消当前轮次 | 控制操作 |
+| `grok_close` | 终止并移除 Grok 进程 | 控制操作 |
+| `grok_list` | 列出当前 Bridge 管理的 Grok Agent | 只读 |
+
+Bridge 最多同时保留三个 Grok 进程；Skill 默认建议只使用一个，只有真正独立的任务才并行使用两个。
+
+## 要求与兼容性
+
+- macOS、Linux 或 WSL；
+- Node.js 22 或更高版本；
+- 支持插件的新版 Codex CLI/Desktop；
+- 已安装并登录官方 Grok Build CLI；
+- 写入模式需要 Git。
+
+最近验证环境（2026-07-17）：macOS、Grok CLI `0.2.101`、`grok-4.5`，以及通过浏览器登录的 SuperGrok 账号。插件也沿用官方 CLI 支持的其他认证方式，例如 `XAI_API_KEY`，但不会自行处理认证流程。
+
+官方参考：[Grok Build](https://docs.x.ai/build/overview)、[ACP 与无头模式](https://docs.x.ai/build/cli/headless-scripting)、[CLI 参数](https://docs.x.ai/build/cli/reference)。
+
+## 配置
+
+本项目没有 npm 运行时依赖，也不保存凭据。
+
+| 环境变量 | 用途 | 默认值 |
+| --- | --- | --- |
+| `GROK_BIN` | 官方 Grok CLI 的路径或命令名 | `~/.grok/bin/grok`，然后尝试 `grok` |
+| `GROK_MODEL` | 默认模型 ID | `grok-4.5` |
+| `GROK_PASSTHROUGH_ENV` | 需要额外传给 Grok 的环境变量名，用逗号分隔 | 未设置 |
+
+每次启动 Grok Agent 时也可以单独指定模型。Grok 默认只继承最小系统环境，以及存在时的 `XAI_API_KEY`；其他宿主变量不会自动继承，除非变量名被明确写入 `GROK_PASSTHROUGH_ENV`。
+
+## 本地开发与测试
 
 ```bash
 git clone https://github.com/Walvez/grok-subagent.git
@@ -87,112 +185,35 @@ codex plugin marketplace add "$PWD"
 codex plugin add grok-subagent@grok-subagent
 ```
 
-Upgrade a Git-installed marketplace snapshot:
+无需安装项目依赖即可运行确定性检查：
+
+```bash
+npm test
+```
+
+真实 Grok ACP 端到端测试会消耗少量 Grok 使用额度：
+
+```bash
+npm run test:e2e
+```
+
+可用 `GROK_E2E_CWD=/绝对路径` 指定只读测试目录。测试还会验证普通主检出目录无法启动写入模式。
+
+升级 Git marketplace 快照：
 
 ```bash
 codex plugin marketplace upgrade grok-subagent
 codex plugin add grok-subagent@grok-subagent
 ```
 
-## Use it
+## 当前限制
 
-You normally use natural language; Codex chooses the appropriate tool through the bundled `$grok-subagent` skill.
+- MCP Bridge 关闭后不会恢复之前的内存 Agent 列表；
+- 回答文本有长度上限，避免无限占用内存；
+- 插件不会自动提交、合并、推送或删除 worktree；
+- Grok 是通过 ACP/MCP 接入的外部 Agent，不是 Codex 内部原生团队 Agent；
+- Grok CLI、模型名和沙箱行为未来可能改变，高安全环境应固定并集中管理 Grok 版本。
 
-### Independent investigation
+## 开源许可
 
-```text
-Use Grok as a read-only subagent to inspect this repository's authentication flow.
-Ask it for file-and-line evidence. You remain responsible for the final diagnosis.
-```
-
-### Second-opinion code review
-
-```text
-Have Grok independently review the current diff for correctness and security issues.
-Compare its findings with your own review and report only verified issues.
-```
-
-### Plan red-team
-
-```text
-Ask Grok to challenge this migration plan. Focus on rollback gaps, data-loss risks,
-and assumptions that need tests. Then synthesize the strongest objections.
-```
-
-### Isolated implementation
-
-```text
-Create an isolated linked Git worktree and let Grok implement the parser change there.
-Do not merge or commit anything. Review the diff and run tests yourself afterward.
-```
-
-Writing mode requires explicit user authorization. The plugin rejects the primary checkout and any directory whose `.git` entry is not a linked-worktree file.
-
-## Tool surface
-
-| Tool | Purpose | Filesystem mode |
-| --- | --- | --- |
-| `grok_spawn_readonly` | Start an independent investigation or review | Grok `read-only` sandbox |
-| `grok_spawn_worker` | Implement inside an explicitly approved linked worktree | Grok `workspace` sandbox + bridge guard |
-| `grok_status` | Read lifecycle, plan, and recent tool status | Read-only |
-| `grok_result` | Read accumulated public answer, optionally waiting briefly | Read-only |
-| `grok_send` | Send a focused follow-up in the same session | Inherits session mode |
-| `grok_cancel` | Cancel the active turn | Control operation |
-| `grok_close` | Terminate and forget the external process | Control operation |
-| `grok_list` | List bridge-owned agents | Read-only |
-
-The bridge permits at most three open Grok processes. The skill recommends one by default and two only for genuinely independent work.
-
-## Configuration
-
-The plugin needs no npm packages and stores no credentials.
-
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `GROK_BIN` | Absolute path or command name for the official Grok CLI | `~/.grok/bin/grok`, then `grok` |
-| `GROK_MODEL` | Default Grok model ID | `grok-4.5` |
-
-The model can also be selected per spawned agent.
-
-## Security and privacy
-
-Read [SECURITY.md](SECURITY.md) before using this on private code.
-
-- Grok is an external model. Files it reads or context it receives may be sent to xAI according to your Grok/xAI plan and policies.
-- Never delegate secrets, credentials, private keys, production `.env` files, or unrelated personal data.
-- `read-only` prevents project writes, but Grok may write its own state under `~/.grok` and temporary paths.
-- On macOS, Grok's child-process network blocking for read-only profiles is not currently enforced; do not treat the sandbox as an offline boundary.
-- Writing mode auto-approves Grok tools only after both a linked-worktree guard and the workspace sandbox are active. Codex still must inspect the diff and run tests.
-- Model agreement is not verification. Repository content can prompt-inject either model.
-
-The bridge discards Grok thought chunks and retains only bounded public text, plan entries, tool titles/status, and sanitized errors in memory.
-
-## Development and tests
-
-No dependency installation is required:
-
-```bash
-npm test
-```
-
-This checks JavaScript syntax, exercises MCP initialization and all eight tool definitions, and validates the marketplace layout.
-
-The authenticated end-to-end test consumes a small amount of Grok usage:
-
-```bash
-npm run test:e2e
-```
-
-Set `GROK_E2E_CWD=/absolute/project/path` to choose another read-only target. The test also confirms that writing mode rejects a normal checkout.
-
-## Current limitations
-
-- One bridge process owns its own in-memory agent list; sessions are not resumed after Codex closes the MCP server.
-- Public answer text is bounded to prevent unbounded memory growth.
-- The bridge does not merge, commit, push, or delete worktrees.
-- It does not make Grok a native Codex team subagent; Grok is an external ACP worker exposed through MCP.
-- Grok CLI behavior, model names, and sandbox implementation may change. Pin or centrally manage Grok versions for sensitive environments.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT，见 [LICENSE](LICENSE)。
