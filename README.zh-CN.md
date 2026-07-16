@@ -60,7 +60,7 @@ flowchart LR
 ## 环境要求
 
 - macOS、Linux 或 WSL；
-- Node.js 18 或更高版本；
+- Node.js 22 或更高版本；
 - 支持插件的新版 Codex CLI/Desktop；
 - 已安装并登录官方 Grok Build CLI；
 - 写入模式需要 Git。
@@ -131,6 +131,7 @@ codex plugin add grok-subagent@grok-subagent
 ```
 
 写入模式必须得到用户明确授权。插件会拒绝主检出目录，也会拒绝 `.git` 不是 worktree 文件的普通目录。
+对写入 Agent 继续追问时，Codex 还必须再次确认追问没有超出同一获批写入范围。
 
 ### 场景五：文档与测试补盲
 
@@ -147,7 +148,7 @@ codex plugin add grok-subagent@grok-subagent
 | `grok_spawn_worker` | 在获批的 linked worktree 中执行实现任务 |
 | `grok_status` | 查看状态、计划和最近工具活动 |
 | `grok_result` | 获取公开回答，可短暂等待完成 |
-| `grok_send` | 在同一会话中发送聚焦追问 |
+| `grok_send` | 在同一会话中发送聚焦追问；写入会话需重新确认范围 |
 | `grok_cancel` | 取消当前轮次 |
 | `grok_close` | 终止并移除 Grok 进程 |
 | `grok_list` | 列出当前 bridge 管理的 Grok Agent |
@@ -162,8 +163,10 @@ codex plugin add grok-subagent@grok-subagent
 | --- | --- | --- |
 | `GROK_BIN` | 官方 Grok CLI 的路径或命令名 | `~/.grok/bin/grok`，然后尝试 `grok` |
 | `GROK_MODEL` | 默认模型 ID | `grok-4.5` |
+| `GROK_PASSTHROUGH_ENV` | 需要额外传给 Grok 的环境变量名，用逗号分隔 | 未设置 |
 
 每次启动 Grok Agent 时也可以单独指定模型。
+Grok 默认只继承最小系统环境，以及存在时的 `XAI_API_KEY`。其他宿主凭据不会自动继承，除非变量名被明确写入 `GROK_PASSTHROUGH_ENV`。
 
 ## 安全与隐私边界
 
@@ -171,6 +174,7 @@ codex plugin add grok-subagent@grok-subagent
 
 - Grok 是外部模型。它读取的文件和收到的上下文可能按照你的 xAI/Grok 套餐与政策发送到 xAI。
 - 不要委派密钥、Token、生产 `.env`、SSH 私钥或无关个人资料。
+- Bridge 会过滤 Grok 子进程环境，但显式放行的变量和 `XAI_API_KEY` 仍对官方 CLI 进程可见。
 - 只读沙箱阻止项目写入，但 Grok 仍可写入 `~/.grok` 和临时目录。
 - macOS 目前不会强制阻断只读沙箱内子进程的网络访问，不能把它当成离线隔离环境。
 - 写入模式虽然同时使用 worktree 检查和 workspace 沙箱，Codex 仍必须审查 diff 并重新运行测试。

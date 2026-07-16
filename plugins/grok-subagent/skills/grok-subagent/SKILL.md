@@ -29,8 +29,9 @@ Use the `grok-subagent` MCP tools to run Grok Build as an external worker while 
 2. Create or select a linked Git worktree dedicated to Grok.
 3. Confirm the worktree has a `.git` file and is not the primary checkout.
 4. Call `grok_spawn_worker` with `confirm_write_scope: true`.
-5. After completion, inspect the worktree diff and run relevant verification from Codex.
-6. Never merge, cherry-pick, commit, push, or delete the worktree unless the user separately requests that action.
+5. For a follow-up, reconfirm that the user authorized the same write scope and pass `confirm_write_scope: true`; otherwise do not send it.
+6. After completion, inspect the worktree diff and run relevant verification from Codex.
+7. Never merge, cherry-pick, commit, push, or delete the worktree unless the user separately requests that action.
 
 ## Safety rules
 

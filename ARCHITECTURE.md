@@ -35,6 +35,8 @@ The MCP server has no third-party runtime dependencies. Each external agent owns
 6. Consume `session/update` events. Keep public message chunks, plan entries, and bounded tool metadata; discard thought chunks.
 7. Keep the process alive for focused follow-ups until cancellation, close, or MCP shutdown.
 
+The child process receives only a small system environment allowlist, supported Grok authentication variables, and variables explicitly named by the operator. Failed or timed-out sessions terminate their Grok process while retaining a bounded diagnostic summary.
+
 ## Read-only mode
 
 `grok_spawn_readonly` starts Grok with `--sandbox read-only`. The bridge accepts any readable absolute directory. Grok's sandbox is the enforcement boundary; the prompt also states that the session must not modify project files.

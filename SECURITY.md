@@ -41,7 +41,7 @@ Codex should independently inspect relevant files, review every diff, and rerun 
 
 ## Authentication handling
 
-The bridge asks the official Grok CLI to use its advertised `cached_token` method. It never reads `~/.grok/auth.json`, prints tokens, or stores credentials. The server also sanitizes common credential-shaped strings from retained errors and task prompts, but this is only a last-resort safeguard and not a complete secret scanner.
+The bridge asks the official Grok CLI to use its advertised `cached_token` method. It never reads `~/.grok/auth.json`, prints tokens, or stores credentials. Grok child processes receive a minimal environment-variable allowlist instead of the bridge's complete environment. `XAI_API_KEY`, when present, is intentionally passed to the official CLI; additional variables require explicit opt-in through `GROK_PASSTHROUGH_ENV` and may be visible to Grok tools. The server also sanitizes common credential-shaped strings from retained errors and task prompts, but this is only a last-resort safeguard and not a complete secret scanner.
 
 ## Dependency and process model
 

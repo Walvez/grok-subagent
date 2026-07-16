@@ -51,7 +51,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the protocol and trust boundaries.
 ## Requirements
 
 - macOS, Linux, or WSL supported by Grok Build;
-- Node.js 18 or newer;
+- Node.js 22 or newer;
 - a recent Codex CLI/Desktop build with plugin support;
 - the official Grok Build CLI, authenticated locally;
 - Git when using writing workers.
@@ -127,6 +127,7 @@ Do not merge or commit anything. Review the diff and run tests yourself afterwar
 ```
 
 Writing mode requires explicit user authorization. The plugin rejects the primary checkout and any directory whose `.git` entry is not a linked-worktree file.
+Follow-ups to a writing agent require Codex to confirm the same authorized write scope again.
 
 ## Tool surface
 
@@ -136,7 +137,7 @@ Writing mode requires explicit user authorization. The plugin rejects the primar
 | `grok_spawn_worker` | Implement inside an explicitly approved linked worktree | Grok `workspace` sandbox + bridge guard |
 | `grok_status` | Read lifecycle, plan, and recent tool status | Read-only |
 | `grok_result` | Read accumulated public answer, optionally waiting briefly | Read-only |
-| `grok_send` | Send a focused follow-up in the same session | Inherits session mode |
+| `grok_send` | Send a focused follow-up; writing sessions require renewed scope confirmation | Inherits session mode |
 | `grok_cancel` | Cancel the active turn | Control operation |
 | `grok_close` | Terminate and forget the external process | Control operation |
 | `grok_list` | List bridge-owned agents | Read-only |
@@ -151,8 +152,10 @@ The plugin needs no npm packages and stores no credentials.
 | --- | --- | --- |
 | `GROK_BIN` | Absolute path or command name for the official Grok CLI | `~/.grok/bin/grok`, then `grok` |
 | `GROK_MODEL` | Default Grok model ID | `grok-4.5` |
+| `GROK_PASSTHROUGH_ENV` | Comma-separated extra environment-variable names to pass to Grok | unset |
 
 The model can also be selected per spawned agent.
+Grok receives a minimal system environment plus `XAI_API_KEY` when present. Unrelated host credentials are not inherited unless their variable names are explicitly listed in `GROK_PASSTHROUGH_ENV`.
 
 ## Security and privacy
 
@@ -160,6 +163,7 @@ Read [SECURITY.md](SECURITY.md) before using this on private code.
 
 - Grok is an external model. Files it reads or context it receives may be sent to xAI according to your Grok/xAI plan and policies.
 - Never delegate secrets, credentials, private keys, production `.env` files, or unrelated personal data.
+- The bridge filters the Grok child environment, but explicitly passed variables and `XAI_API_KEY` remain visible to the official CLI process.
 - `read-only` prevents project writes, but Grok may write its own state under `~/.grok` and temporary paths.
 - On macOS, Grok's child-process network blocking for read-only profiles is not currently enforced; do not treat the sandbox as an offline boundary.
 - Writing mode auto-approves Grok tools only after both a linked-worktree guard and the workspace sandbox are active. Codex still must inspect the diff and run tests.
@@ -175,7 +179,7 @@ No dependency installation is required:
 npm test
 ```
 
-This checks JavaScript syntax, exercises MCP initialization and all eight tool definitions, and validates the marketplace layout.
+This checks JavaScript syntax, exercises deterministic security and lifecycle tests, validates MCP initialization and all eight tool definitions, and validates the marketplace layout.
 
 The authenticated end-to-end test consumes a small amount of Grok usage:
 

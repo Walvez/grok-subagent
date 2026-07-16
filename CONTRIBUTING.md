@@ -4,7 +4,7 @@ Contributions are welcome, especially for ACP compatibility, safer isolation, cr
 
 ## Development setup
 
-1. Install Node.js 18 or newer.
+1. Install Node.js 22 or newer.
 2. Clone the repository.
 3. Run `npm test`.
 4. Add the local marketplace with `codex plugin marketplace add "$PWD"`.
