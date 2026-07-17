@@ -2,13 +2,13 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { accessSync, constants, lstatSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.1";
+const VERSION = "0.3.0";
 const MAX_AGENTS = 3;
 const MAX_RETAINED_FAILED_AGENTS = 3;
 const MAX_TEXT = 120_000;
@@ -63,9 +63,36 @@ const TOOL_DEFINITIONS = [
     annotations: { title: "Start isolated Grok worker", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
   },
   {
+    name: "grok_handoff_interactive",
+    description: "Open an independent interactive Grok Build TUI in a new macOS Terminal window. Codex hands off the prompt and does not supervise the session.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Complete task brief that Codex hands to the interactive Grok session." },
+        cwd: { type: "string", description: "Absolute project directory. Worktree mode requires the Git repository root." },
+        access_mode: { type: "string", enum: ["read_only", "isolated_worktree"], description: "Read-only inspection or edits in a Grok-created linked worktree." },
+        confirm_interactive_handoff: { type: "boolean", description: "Must be true after the user explicitly asks to interact directly with Grok in a separate window." },
+        role: { type: "string", description: "Optional specialist role included in the handoff prompt." },
+        model: { type: "string", description: "Optional Grok Build model ID." }
+      },
+      required: ["task", "cwd", "access_mode", "confirm_interactive_handoff"],
+      additionalProperties: false
+    },
+    annotations: { title: "Hand off to interactive Grok", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+  },
+  {
     name: "grok_status",
-    description: "Inspect one Grok agent's lifecycle, recent plan, and bounded tool activity without waiting.",
-    inputSchema: objectWithAgentId(),
+    description: "Inspect one Grok agent's lifecycle and visible progress. Optionally wait for a newer progress revision.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string" },
+        after_revision: { type: "integer", minimum: 0, description: "Return when progress is newer than this revision." },
+        wait_seconds: { type: "integer", minimum: 0, maximum: 30, default: 0 }
+      },
+      required: ["agent_id"],
+      additionalProperties: false
+    },
     annotations: readOnlyAnnotations("Inspect Grok agent")
   },
   {
@@ -167,6 +194,15 @@ function assertLinkedWorktree(input) {
   return path;
 }
 
+function assertGitRepositoryRoot(input) {
+  const path = absoluteDirectory(input, "cwd");
+  const probe = spawnSync("git", ["-C", path, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 5_000, env: buildChildEnv() });
+  if (probe.status !== 0) throw new Error("Interactive worktree handoff requires a Git repository root.");
+  const gitRoot = realpathSync(resolve(probe.stdout.trim()));
+  if (gitRoot !== path) throw new Error("cwd must be the root of the Git repository for interactive worktree handoff.");
+  return path;
+}
+
 function buildChildEnv(source = process.env) {
   const env = {};
   for (const key of CHILD_ENV_KEYS) {
@@ -197,6 +233,80 @@ function findGrok() {
   throw new Error("Grok CLI was not found. Install and authenticate Grok Build first.");
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+function appleScriptString(value) {
+  return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+function interactiveWorktreeName() {
+  const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  return `grok-handoff-${stamp}-${randomUUID().slice(0, 6)}`;
+}
+
+function buildInteractiveCommand({ binary, cwd, promptFile, promptDir, accessMode, model, worktreeName }) {
+  const args = [shellQuote(binary), "--no-subagents"];
+  if (model) args.push("--model", shellQuote(model));
+  if (accessMode === "read_only") {
+    args.push("--sandbox", "read-only", "--permission-mode", "default");
+  } else {
+    args.push(`--worktree=${shellQuote(worktreeName)}`, "--sandbox", "workspace", "--permission-mode", "acceptEdits");
+  }
+  args.push('--', '"$grok_handoff_prompt"');
+  return [
+    `cd ${shellQuote(cwd)}`,
+    `grok_handoff_prompt="$(cat -- ${shellQuote(promptFile)})"`,
+    `{ rm -f -- ${shellQuote(promptFile)}; rmdir -- ${shellQuote(promptDir)} 2>/dev/null || true; exec ${args.join(" ")}; }`
+  ].join(" && ");
+}
+
+function launchInteractiveHandoff(args) {
+  if (process.platform !== "darwin") throw new Error("Interactive Terminal handoff is currently supported only on macOS.");
+  if (args.confirm_interactive_handoff !== true) {
+    throw new Error("confirm_interactive_handoff must be true after the user explicitly requests a separate interactive Grok window.");
+  }
+  if (typeof args.task !== "string" || !args.task.trim()) throw new Error("task is required.");
+  if (args.task.length > MAX_TEXT) throw new Error(`task must be at most ${MAX_TEXT} characters.`);
+  if (!["read_only", "isolated_worktree"].includes(args.access_mode)) throw new Error("access_mode must be read_only or isolated_worktree.");
+  const cwd = args.access_mode === "isolated_worktree" ? assertGitRepositoryRoot(args.cwd) : absoluteDirectory(args.cwd, "cwd");
+  const binary = findGrok();
+  const worktreeName = args.access_mode === "isolated_worktree" ? interactiveWorktreeName() : null;
+  const rules = [
+    `Codex has handed this task to you as an interactive ${cleanText(args.role || "Grok Build specialist")}.`,
+    "Work directly with the user in this Terminal window. Ask the user when a material decision or additional authority is required.",
+    "Do not spawn subagents.",
+    args.access_mode === "read_only"
+      ? "This is a read-only session. Do not modify project files."
+      : "Work only in the isolated worktree created for this session. Do not commit, push, merge, publish, or alter other worktrees unless the user explicitly authorizes that action in this window.",
+    "When finished, summarize the changes, tests, remaining risks, and the worktree path so the user can return to Codex for independent verification.",
+    "",
+    "Task from Codex:",
+    cleanText(args.task)
+  ].join("\n");
+  const promptDir = mkdtempSync(join(tmpdir(), "grok-handoff-"));
+  const promptFile = join(promptDir, "prompt.txt");
+  writeFileSync(promptFile, rules, { encoding: "utf8", mode: 0o600 });
+  const command = buildInteractiveCommand({ binary, cwd, promptFile, promptDir, accessMode: args.access_mode, model: args.model, worktreeName });
+  const script = `tell application "Terminal"\nactivate\ndo script "${appleScriptString(command)}"\nend tell`;
+  const launched = spawnSync("osascript", ["-e", script], { encoding: "utf8", timeout: 10_000, env: buildChildEnv() });
+  if (launched.status !== 0) {
+    rmSync(promptDir, { recursive: true, force: true });
+    throw new Error(`Could not open the interactive Grok Terminal window: ${cleanText(launched.stderr || launched.stdout || "unknown error")}`);
+  }
+  const cleanupTimer = setTimeout(() => rmSync(promptDir, { recursive: true, force: true }), 60_000);
+  cleanupTimer.unref();
+  return {
+    launched: true,
+    supervision: "user",
+    access_mode: args.access_mode,
+    cwd,
+    worktree_name: worktreeName,
+    note: "This Terminal session is independent. Return to Codex when you want its result or diff verified."
+  };
+}
+
 class GrokAgent {
   constructor({ cwd, mode, role, model, timeoutSeconds }) {
     this.id = randomUUID();
@@ -214,6 +324,7 @@ class GrokAgent {
     this.error = null;
     this.startedAt = new Date().toISOString();
     this.updatedAt = this.startedAt;
+    this.revision = 0;
     this.requestId = 0;
     this.pending = new Map();
     this.turnPromise = null;
@@ -301,16 +412,20 @@ class GrokAgent {
 
   consumeUpdate(update) {
     if (!update || typeof update !== "object") return;
-    this.touch();
     if (update.sessionUpdate === "agent_message_chunk") {
+      this.touch();
       this.text = appendBounded(this.text, update.content?.text || "");
     } else if (update.sessionUpdate === "plan") {
+      this.touch();
       this.plan = sanitizePlan(update);
     } else if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+      this.touch();
       this.toolEvents.push({
         type: update.sessionUpdate,
         title: cleanText(update.title || update.kind || "tool"),
-        status: cleanText(update.status || "unknown")
+        status: cleanText(update.status || "unknown"),
+        at: this.updatedAt,
+        revision: this.revision
       });
       this.toolEvents = this.toolEvents.slice(-20);
     }
@@ -409,7 +524,10 @@ class GrokAgent {
     this.terminateProcess();
   }
 
-  touch() { this.updatedAt = new Date().toISOString(); }
+  touch() {
+    this.updatedAt = new Date().toISOString();
+    this.revision += 1;
+  }
 
   summary(includeText = false) {
     const result = {
@@ -421,12 +539,17 @@ class GrokAgent {
       cwd: this.cwd,
       started_at: this.startedAt,
       updated_at: this.updatedAt,
+      elapsed_seconds: Math.max(0, Math.trunc((Date.now() - Date.parse(this.startedAt)) / 1000)),
+      revision: this.revision,
       plan: this.plan,
       recent_tools: this.toolEvents,
       error: this.error
     };
     if (includeText) result.response = this.text;
-    else result.response_chars = this.text.length;
+    else {
+      result.response_chars = this.text.length;
+      result.public_response_preview = this.text.slice(-1000);
+    }
     return result;
   }
 }
@@ -487,11 +610,27 @@ async function waitForAgent(agent, seconds) {
   }
 }
 
+async function waitForRevision(agent, afterRevision, seconds) {
+  if (!Number.isInteger(afterRevision) || afterRevision < 0) return;
+  const deadline = Date.now() + clamp(seconds, 0, 30, 0) * 1000;
+  while (agent.revision <= afterRevision && ["running", "cancelling"].includes(agent.status) && Date.now() < deadline) {
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 200));
+  }
+}
+
 async function callTool(name, args = {}) {
   switch (name) {
     case "grok_spawn_readonly": return spawnAgent(args, "readonly");
     case "grok_spawn_worker": return spawnAgent(args, "worker");
-    case "grok_status": return getAgent(args.agent_id).summary(false);
+    case "grok_handoff_interactive": return launchInteractiveHandoff(args);
+    case "grok_status": {
+      const agent = getAgent(args.agent_id);
+      await waitForRevision(agent, args.after_revision, args.wait_seconds);
+      return {
+        ...agent.summary(false),
+        changed: !Number.isInteger(args.after_revision) || agent.revision > args.after_revision
+      };
+    }
     case "grok_result": {
       const agent = getAgent(args.agent_id);
       await waitForAgent(agent, args.wait_seconds);
@@ -576,12 +715,16 @@ export {
   TOOL_DEFINITIONS,
   VERSION,
   absoluteDirectory,
+  appleScriptString,
   assertLinkedWorktree,
+  assertGitRepositoryRoot,
+  buildInteractiveCommand,
   buildChildEnv,
   cleanText,
   negotiateProtocolVersion,
   shutdown,
-  startMcpServer
+  startMcpServer,
+  waitForRevision
 };
 
 let isMainModule = false;

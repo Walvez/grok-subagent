@@ -1,6 +1,6 @@
 {
   "name": "grok-subagent",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "Run authenticated Grok Build agents as controlled external subagents from Codex.",
   "author": {
     "name": "Walvez"

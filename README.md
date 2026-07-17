@@ -137,13 +137,14 @@ flowchart LR
 
 在私有代码上使用前，请阅读 [SECURITY.md](SECURITY.md)。
 
-## 八个管理工具
+## 九个管理工具
 
 | 工具 | 用途 | 文件系统模式 |
 | --- | --- | --- |
 | `grok_spawn_readonly` | 启动独立调查、审查或方案分析 | Grok `read-only` 沙箱 |
 | `grok_spawn_worker` | 在获批的 linked worktree 中执行实现任务 | Grok `workspace` 沙箱 + Bridge 检查 |
-| `grok_status` | 查看生命周期、计划和最近工具活动 | 只读 |
+| `grok_handoff_interactive` | 在新的 macOS Terminal 窗口打开可交互 Grok TUI，Codex 完成 prompt 移交后不再监督 | 只读或 Grok 创建的隔离 worktree |
+| `grok_status` | 查看生命周期、运行时长、计划、最近工具活动和公开回答片段；支持按进度版本等待增量 | 只读 |
 | `grok_result` | 获取公开回答，可短暂等待当前轮次完成 | 只读 |
 | `grok_send` | 在同一会话中聚焦追问；写入会话需重新确认范围 | 继承会话模式 |
 | `grok_cancel` | 取消当前轮次 | 控制操作 |
@@ -151,6 +152,16 @@ flowchart LR
 | `grok_list` | 列出当前 Bridge 管理的 Grok Agent | 只读 |
 
 Bridge 最多同时保留三个 Grok 进程；Skill 默认建议只使用一个，只有真正独立的任务才并行使用两个。
+
+### 交互式移交模式
+
+当你明确要求“把任务全权交给 Grok，并让我在窗口里直接沟通”时，Codex 会先把目标、范围、已有上下文、完成标准和禁止事项整理成完整 prompt，再调用 `grok_handoff_interactive` 打开新的 macOS Terminal 窗口。之后 Grok TUI 由你直接监督和追问，Codex 不轮询、不自动收尾，也不会假装知道窗口里的最新状态。
+
+只读任务使用 Grok `read-only` 沙箱；实现任务默认使用 `--worktree` 创建隔离工作区，并自动接受工作区内的文件编辑，但提交、推送、发布和其他外部操作仍需你在 Grok 窗口里另行授权。完成后回到 Codex，Codex 再检查 worktree diff、测试和关键结论。
+
+### 可见进度如何工作
+
+Grok 运行期间，Skill 会让 Codex 用 `grok_status` 做最长 30 秒的增量等待，并把有实质变化的计划步骤、工具状态、运行时长或公开回答片段转成 Codex 任务里的简短进度消息；即使没有新细节，也会在 60 秒内给出一次心跳。Bridge 不转发私有思维链，因此这里展示的是可核验的工作状态，不是模型的隐藏推理文本。
 
 ## 要求与兼容性
 

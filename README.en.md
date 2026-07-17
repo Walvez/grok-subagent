@@ -138,13 +138,14 @@ Important boundaries:
 
 Read [SECURITY.md](SECURITY.md) before using the plugin on private code.
 
-## Eight management tools
+## Nine management tools
 
 | Tool | Purpose | Filesystem mode |
 | --- | --- | --- |
 | `grok_spawn_readonly` | Start an independent investigation, review, or plan analysis | Grok `read-only` sandbox |
 | `grok_spawn_worker` | Implement inside an approved linked worktree | Grok `workspace` sandbox + bridge guard |
-| `grok_status` | Read lifecycle, plan, and recent tool activity | Read-only |
+| `grok_handoff_interactive` | Open an interactive Grok TUI in a new macOS Terminal window and stop Codex supervision after prompt handoff | Read-only or a Grok-created isolated worktree |
+| `grok_status` | Read lifecycle, elapsed time, plan, recent tool activity, and a public-response preview; optionally wait for a newer revision | Read-only |
 | `grok_result` | Read the public answer, optionally waiting briefly | Read-only |
 | `grok_send` | Send a focused follow-up; writing sessions require renewed scope confirmation | Inherits session mode |
 | `grok_cancel` | Cancel the active turn | Control operation |
@@ -152,6 +153,16 @@ Read [SECURITY.md](SECURITY.md) before using the plugin on private code.
 | `grok_list` | List agents owned by the current bridge | Read-only |
 
 The bridge permits at most three open Grok processes. The skill recommends one by default and two only for genuinely independent work.
+
+### Interactive handoff mode
+
+When the user explicitly asks Codex to hand a task fully to Grok and interact with it directly, Codex turns the goal, scope, known context, completion criteria, and restrictions into a self-contained prompt. `grok_handoff_interactive` then opens a new macOS Terminal window. The Grok TUI is user-supervised from that point onward: Codex does not poll it, close it automatically, or pretend to know its current state.
+
+Read-only work uses Grok's `read-only` sandbox. Implementation work uses `--worktree` to create an isolated worktree and accepts file edits there, while commits, pushes, publication, and other external actions still require explicit authorization in the Grok window. The user can return to Codex afterward for independent diff, test, and claim verification.
+
+### How visible progress works
+
+While Grok is running, the skill asks Codex to use `grok_status` for incremental waits of up to 30 seconds and relay material plan steps, tool status, elapsed time, or public-response previews as concise progress messages in the Codex task. It also emits a heartbeat within 60 seconds when Grok exposes no new detail. The bridge never forwards private chain-of-thought, so this is verifiable work status rather than hidden reasoning text.
 
 ## Requirements and compatibility
 

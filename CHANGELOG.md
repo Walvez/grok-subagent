@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here.
 
+## 0.3.0 - 2026-07-18
+
+### Added
+
+- Added a macOS-only `grok_handoff_interactive` tool that opens the official Grok TUI in a new Terminal window with a Codex-authored task prompt.
+- Added read-only and isolated-worktree access modes for user-supervised interactive handoffs.
+
+### Security
+
+- Interactive implementation handoffs cannot write directly to the primary checkout and do not authorize commits, pushes, publication, or changes outside the Grok-created worktree.
+- Initial handoff prompts use mode-0600 temporary files and are removed by the launched Terminal command before Grok starts.
+
+## 0.2.0 - 2026-07-18
+
+### Added
+
+- Added monotonic progress revisions, elapsed time, timestamped tool events, and a bounded public-response preview to Grok agent status.
+- Added optional long-polling to `grok_status` through `after_revision` and `wait_seconds`.
+- Made the orchestration skill relay material Grok progress and provide a user-visible heartbeat at least once per minute.
+
+### Security
+
+- Kept visible progress limited to public answer chunks, plan entries, tool metadata, and lifecycle state; private chain-of-thought remains discarded.
+
 ## 0.1.1 - 2026-07-17
 
 ### Fixed

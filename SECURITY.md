@@ -46,3 +46,9 @@ The bridge asks the official Grok CLI to use its advertised `cached_token` metho
 ## Dependency and process model
 
 The MCP server uses only Node.js standard-library modules. Grok is launched with argument arrays rather than shell command interpolation. All child processes are terminated when the bridge shuts down, with a forced-kill fallback.
+
+## Interactive handoff boundary
+
+Interactive handoff is macOS-only and opens the official Grok TUI in a separate Terminal window. It is not an ACP-managed agent: Codex cannot observe its later prompts, approvals, filesystem activity, or completion state. Read-only handoffs use Grok's read-only sandbox. Writing handoffs start with `--worktree` and must originate at a Git repository root; the handoff prompt forbids commits, pushes, publication, and changes to other worktrees without fresh user authorization in that Terminal window.
+
+The initial prompt is passed through a mode-0600 temporary file that the Terminal command removes before starting Grok. The prompt is sanitized but still leaves the machine for xAI under the user's Grok plan and policies. Do not use interactive handoff for secrets or unrelated personal data.
