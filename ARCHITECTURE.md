@@ -23,6 +23,7 @@ The MCP server has no third-party runtime dependencies. Each external agent owns
 - one active prompt turn at a time;
 - bounded public answer text;
 - recent plan and tool-status summaries;
+- a monotonic progress revision, elapsed time, and bounded public-response preview;
 - lifecycle state and sanitized errors.
 
 ## ACP lifecycle
@@ -33,9 +34,16 @@ The MCP server has no third-party runtime dependencies. Each external agent owns
 4. Create a session with `session/new`, the target directory, no nested MCP servers, and additional orchestration rules.
 5. Send the task with `session/prompt`.
 6. Consume `session/update` events. Keep public message chunks, plan entries, and bounded tool metadata; discard thought chunks.
-7. Keep the process alive for focused follow-ups until cancellation, close, or MCP shutdown.
+7. Let `grok_status` long-poll a newer progress revision for up to 30 seconds so the orchestration skill can relay visible progress without tight polling.
+8. Keep the process alive for focused follow-ups until cancellation, close, or MCP shutdown.
 
 The child process receives only a small system environment allowlist, supported Grok authentication variables, and variables explicitly named by the operator. Failed or timed-out sessions terminate their Grok process while retaining a bounded diagnostic summary.
+
+## Interactive handoff mode
+
+`grok_handoff_interactive` is intentionally outside the managed ACP lifecycle. On macOS it writes the sanitized handoff prompt to a mode-0600 temporary file, opens a new Terminal window, reads and removes that file, and starts the official interactive Grok TUI. Read-only handoffs use the read-only sandbox. Writing handoffs require a Git repository root and ask Grok to create an isolated worktree.
+
+The MCP call returns after Terminal opens. The bridge does not retain the TUI process, session ID, transcript, or completion state. The user owns interaction and lifecycle from that point and must return to Codex explicitly for independent verification.
 
 ## Read-only mode
 

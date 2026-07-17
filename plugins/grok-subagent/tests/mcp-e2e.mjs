@@ -32,6 +32,17 @@ try {
     task: `This is a read-only integration test. Inspect only the current directory. Reply with exactly two lines: GROK_SUBAGENT_OK and cwd=${expectedCwd}. Do not modify files and do not use subagents.`
   });
   agentId = started.agent_id;
+  assert(Number.isInteger(started.revision));
+
+  const progress = await client.call("grok_status", {
+    agent_id: agentId,
+    after_revision: started.revision,
+    wait_seconds: 30
+  });
+  assert(Number.isInteger(progress.revision));
+  assert(progress.revision >= started.revision);
+  assert.equal(typeof progress.elapsed_seconds, "number");
+  assert.equal(typeof progress.public_response_preview, "string");
 
   let result;
   for (let attempt = 0; attempt < 8; attempt += 1) {

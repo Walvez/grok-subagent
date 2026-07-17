@@ -11,12 +11,13 @@ try {
   assert.equal(initialized.serverInfo.name, "grok-subagent");
   const listed = await client.request("tools/list");
   const names = listed.tools.map(tool => tool.name);
-  for (const name of ["grok_spawn_readonly", "grok_spawn_worker", "grok_status", "grok_result", "grok_send", "grok_cancel", "grok_close", "grok_list"]) {
+  for (const name of ["grok_spawn_readonly", "grok_spawn_worker", "grok_handoff_interactive", "grok_status", "grok_result", "grok_send", "grok_cancel", "grok_close", "grok_list"]) {
     assert(names.includes(name), `missing ${name}`);
   }
   assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_readonly").annotations.readOnlyHint, false);
   assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_readonly").annotations.destructiveHint, false);
   assert.equal(listed.tools.find(tool => tool.name === "grok_spawn_worker").annotations.destructiveHint, true);
+  assert.equal(listed.tools.find(tool => tool.name === "grok_handoff_interactive").annotations.destructiveHint, true);
   assert.equal(listed.tools.find(tool => tool.name === "grok_send").annotations.destructiveHint, true);
   console.log(`MCP smoke passed (${names.length} tools).`);
 } finally {

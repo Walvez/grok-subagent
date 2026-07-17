@@ -8,10 +8,13 @@ import test from "node:test";
 import {
   GrokAgent,
   TOOL_DEFINITIONS,
+  appleScriptString,
   assertLinkedWorktree,
+  buildInteractiveCommand,
   buildChildEnv,
   cleanText,
-  negotiateProtocolVersion
+  negotiateProtocolVersion,
+  waitForRevision
 } from "../plugins/grok-subagent/mcp-server/server.mjs";
 
 test("child environment excludes unrelated secrets and supports explicit passthrough", () => {
@@ -61,8 +64,57 @@ test("tool annotations reflect process and writing side effects", () => {
   assert.equal(byName.grok_spawn_readonly.annotations.readOnlyHint, false);
   assert.equal(byName.grok_spawn_readonly.annotations.destructiveHint, false);
   assert.equal(byName.grok_send.annotations.destructiveHint, true);
+  assert.equal(byName.grok_handoff_interactive.annotations.destructiveHint, true);
   assert.equal(byName.grok_close.annotations.idempotentHint, false);
   assert(byName.grok_send.inputSchema.properties.confirm_write_scope);
+  assert(byName.grok_status.inputSchema.properties.after_revision);
+  assert.equal(byName.grok_status.inputSchema.properties.wait_seconds.maximum, 30);
+});
+
+test("interactive handoff command quotes paths and keeps the prompt out of the command", () => {
+  const command = buildInteractiveCommand({
+    binary: "/tmp/Grok Build/grok",
+    cwd: "/tmp/project's files",
+    promptFile: "/tmp/handoff prompt/prompt.txt",
+    promptDir: "/tmp/handoff prompt",
+    accessMode: "isolated_worktree",
+    model: "grok-test",
+    worktreeName: "grok-handoff-test"
+  });
+  assert(command.includes("cd '/tmp/project'\"'\"'s files'"));
+  assert(command.includes("--worktree='grok-handoff-test'"));
+  assert(command.includes("--permission-mode acceptEdits"));
+  assert(command.includes('"$grok_handoff_prompt"'));
+  assert(!command.includes("secret task body"));
+  assert.equal(appleScriptString('say "hello" \\ path'), 'say \\"hello\\" \\\\ path');
+});
+
+test("visible progress has revisions, bounded previews, and waitable updates", async () => {
+  const agent = new GrokAgent({
+    cwd: tmpdir(),
+    mode: "readonly",
+    role: "test",
+    model: "test-model",
+    timeoutSeconds: 60
+  });
+  agent.status = "running";
+  agent.consumeUpdate({ sessionUpdate: "agent_message_chunk", content: { text: "Public progress" } });
+  const first = agent.summary(false);
+  assert(first.revision > 0);
+  assert.equal(first.public_response_preview, "Public progress");
+
+  agent.consumeUpdate({ sessionUpdate: "agent_thought_chunk", content: { text: "private" } });
+  assert.equal(agent.revision, first.revision);
+  assert(!agent.summary(false).public_response_preview.includes("private"));
+
+  const waiting = waitForRevision(agent, first.revision, 1);
+  setTimeout(() => agent.consumeUpdate({ sessionUpdate: "tool_call", title: "Inspect files", status: "in_progress" }), 10);
+  await waiting;
+  const second = agent.summary(false);
+  assert(second.revision > first.revision);
+  assert.equal(second.recent_tools.at(-1).title, "Inspect files");
+  assert.equal(second.recent_tools.at(-1).revision, second.revision);
+  assert(second.recent_tools.at(-1).at);
 });
 
 test("linked worktree guard accepts a symlinked root and rejects a primary checkout", () => {
