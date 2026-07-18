@@ -7,7 +7,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 const marketplace = JSON.parse(readFileSync(resolve(root, ".agents/plugins/marketplace.json"), "utf8"));
 
-assert.equal(marketplace.name, "grok-subagent");
+assert.equal(marketplace.name, "walvez-grok");
 assert.equal(marketplace.plugins.length, 1);
 const entry = marketplace.plugins[0];
 assert.equal(entry.name, "grok-subagent");
