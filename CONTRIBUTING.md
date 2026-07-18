@@ -8,7 +8,7 @@ Contributions are welcome, especially for ACP compatibility, safer isolation, cr
 2. Clone the repository.
 3. Run `npm test`.
 4. Add the local marketplace with `codex plugin marketplace add "$PWD"`.
-5. Install with `codex plugin add grok-subagent@grok-subagent`.
+5. Install with `codex plugin add grok-subagent@walvez-grok`.
 6. Start a new Codex task to load the updated plugin.
 
 No npm dependency installation is required.

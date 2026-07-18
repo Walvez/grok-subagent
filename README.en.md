@@ -31,7 +31,7 @@ grok
 
 ```bash
 codex plugin marketplace add Walvez/grok-subagent
-codex plugin add grok-subagent@grok-subagent
+codex plugin add grok-subagent@walvez-grok
 ```
 
 Start a **new Codex task** after installation so the skill and MCP tools are loaded into the new task context.
@@ -194,7 +194,7 @@ The model can also be selected per agent. Grok receives a minimal system environ
 git clone https://github.com/Walvez/grok-subagent.git
 cd grok-subagent
 codex plugin marketplace add "$PWD"
-codex plugin add grok-subagent@grok-subagent
+codex plugin add grok-subagent@walvez-grok
 ```
 
 Run the deterministic checks without installing project dependencies:
@@ -214,9 +214,22 @@ Set `GROK_E2E_CWD=/absolute/project/path` to select another read-only target. Th
 Upgrade a Git marketplace snapshot with:
 
 ```bash
-codex plugin marketplace upgrade grok-subagent
-codex plugin add grok-subagent@grok-subagent
+codex plugin marketplace upgrade walvez-grok
+codex plugin add grok-subagent@walvez-grok
 ```
+
+When upgrading from `0.3.0` or earlier, migrate once from the old
+`grok-subagent` marketplace ID to `walvez-grok`:
+
+```bash
+codex plugin remove grok-subagent@grok-subagent
+codex plugin marketplace remove grok-subagent
+codex plugin marketplace add Walvez/grok-subagent
+codex plugin add grok-subagent@walvez-grok
+```
+
+Start a new Codex task after migration. Later releases can use the regular
+upgrade commands above.
 
 ## Current limitations
 
