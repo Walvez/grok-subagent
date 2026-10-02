@@ -1,10 +1,10 @@
 {
   "name": "grok-subagent-codex-marketplace",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "private": true,
-  "description": "A Codex plugin that delegates bounded work and isolated Grok-native search to the official Grok Build CLI.",
+  "description": "A Codex plugin that delegates bounded work and checked, repository-free Grok-native search to the official Grok Build CLI.",
   "scripts": {
-    "test": "node --check plugins/grok-subagent/mcp-server/server.mjs && node --test tests/*.test.mjs && node plugins/grok-subagent/tests/mcp-smoke.mjs && node tests/validate-repo.mjs",
+    "test": "node --check plugins/grok-subagent/mcp-server/server.mjs && node --test tests/*.test.mjs && python3 -m unittest discover -s tests -p 'test_*.py' && node plugins/grok-subagent/tests/mcp-smoke.mjs && node tests/validate-repo.mjs",
     "test:e2e": "node plugins/grok-subagent/tests/mcp-e2e.mjs"
   },
   "engines": {

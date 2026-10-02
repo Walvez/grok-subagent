@@ -25,7 +25,7 @@ python3 plugins/grok-subagent/scripts/run_search.py run --platform x --depth qui
 - 无 npm 运行时依赖
 - MCP stdio bridge：`plugins/grok-subagent/mcp-server/server.mjs`
 - 官方 `grok agent stdio`（ACP）用于只读/写入/交互
-- 隔离搜索桥：`plugins/grok-subagent/scripts/run_search.py`（改编自 sudoHG/codex-grok-search）
+- 检查式搜索桥：`plugins/grok-subagent/scripts/run_search.py`（改编自 sudoHG/codex-grok-search）
 
 ## 目录与约定
 
@@ -35,11 +35,13 @@ python3 plugins/grok-subagent/scripts/run_search.py run --platform x --depth qui
 - 用户可见行为变更时同步更新 `README.md`、`README.en.md`、`CHANGELOG.md`、`ARCHITECTURE.md`、`SECURITY.md`
 - 写入模式只允许 linked Git worktree（`.git` 为文件），禁止主检出
 - 搜索模式禁止进入当前仓库 cwd；结果缓存在 `~/.cache/grok-subagent/search-runs`
+- 搜索沿用原生 Grok CLI 登录，不读取或复制认证文件；临时 cwd 和工具限制不是 OS 沙箱
+- 搜索成功必须满足版本 2 完成契约；失败或取消的文本只能作为诊断
 - 不要提交 `~/.grok/auth.json`、token、私有 prompt 或含真实密钥的测试仓
 
 ## 当前状态与下一步
 
-- 现役版本：`0.4.0`，`main` 已含隔离搜索工具
-- 本地插件缓存：`~/.codex/plugins/cache/walvez-grok/grok-subagent/0.4.0`
-- 公开 GitHub Release 仍停在 `v0.3.1`；若要对外安装路径解析到 0.4.0，需要补 tag/Release
+- 当前源版本：`0.4.2`，包含检查式搜索工具
+- 已安装缓存可能仍是 `0.4.0`；安装或升级后必须新建 Codex 任务
+- 公开 GitHub Release 仍停在 `v0.3.1`；若要对外安装路径解析到 0.4.2，需要补 tag/Release
 - 新任务中优先：项目审查用 `grok_spawn_readonly`；X/Reddit/实时公开研究用 `grok_search`

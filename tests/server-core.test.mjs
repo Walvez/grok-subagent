@@ -212,8 +212,11 @@ test("search tools are advertised and the bridge script is present", () => {
   assert.equal(byName.grok_search.inputSchema.required.includes("query"), true);
   assert.deepEqual(byName.grok_search.inputSchema.properties.platform.enum, ["auto", "x", "reddit", "web"]);
   assert.deepEqual(byName.grok_search.inputSchema.properties.depth.enum, ["quick", "deep"]);
+  assert.equal(byName.grok_search.inputSchema.properties.model.type, "string");
+  assert.equal(byName.grok_search.inputSchema.properties.max_turns.default, 6);
+  assert.equal(byName.grok_search.inputSchema.properties.json_schema.type, "object");
+  assert.equal(byName.grok_search.inputSchema.properties.timeout_seconds.default, 180);
   const script = searchScriptPath();
   assert.match(script, /run_search\.py$/);
   assert(statSync(script).isFile());
 });
-

@@ -96,7 +96,11 @@ Use Grok to find the most discussed X posts about OpenCodex from the past 7 days
 include direct links, and prefer high-engagement original posts over ordinary web mirrors.
 ```
 
-`grok_search` starts Grok 4.5 outside the current repository with only `x_search`, `web_search`, and `web_fetch`, then returns Grok's complete answer to Codex.
+`grok_search` defaults to selectable Grok 4.7 and runs from a fresh temporary working directory outside the repository. It enables `x_search`, `web_search`, and `web_fetch` while explicitly denying known local read, shell, edit, and MCP tools. A result succeeds only when the CLI exits zero, emits one JSON object, ends with `end_turn`, and contains nonblank Markdown. The original Markdown is preserved exactly. Tool restrictions are not an operating-system sandbox, and native global Grok configuration may still load.
+
+The plugin manifest gives MCP tool transport 1,815 seconds. This host-level limit exceeds the maximum 1,800-second search deadline and leaves margin for up to eight seconds of bridge cleanup. It does not change an individual search's `timeout_seconds`.
+
+Callers that need machine-readable output can pass `json_schema`. The bridge rejects remote and file references before invocation, then validates the full result locally with the optional Python `jsonschema` package. Plain Markdown search has no Python package dependency.
 
 ## Common workflows
 
@@ -136,6 +140,7 @@ Writing mode requires explicit user authorization. The plugin rejects the primar
 | --- | --- | --- | --- |
 | Read-only investigation | Grok `read-only` sandbox | Any readable absolute directory | Codex verifies files, commands, and conclusions |
 | Writing worker | Grok `workspace` sandbox, limited to a linked worktree | Explicit user authorization plus bridge worktree validation | Codex inspects the diff and reruns tests |
+| Public search | Repository-free temporary CWD plus tool restrictions, without an OS sandbox | Native Grok CLI login | Codex verifies sources and conclusions |
 
 Important boundaries:
 
@@ -146,6 +151,7 @@ Important boundaries:
 - Read-only mode prevents project writes, but Grok may still write under `~/.grok` and temporary directories. On macOS, do not treat it as an offline network boundary.
 - Model agreement is not verification, and repository content may prompt-inject either model.
 - The bridge discards thought chunks and retains only bounded public text, plan entries, tool titles/status, and sanitized errors in memory.
+- Search preserves native `HOME` and Grok login discovery without reading, copying, or persisting auth files. Text from failed or cancelled runs remains a private diagnostic and never becomes a successful result.
 
 Read [SECURITY.md](SECURITY.md) before using the plugin on private code.
 
@@ -156,7 +162,7 @@ Read [SECURITY.md](SECURITY.md) before using the plugin on private code.
 | `grok_spawn_readonly` | Start an independent investigation, review, or plan analysis | Grok `read-only` sandbox |
 | `grok_spawn_worker` | Implement inside an approved linked worktree | Grok `workspace` sandbox + bridge guard |
 | `grok_handoff_interactive` | Open an interactive Grok TUI in a new macOS Terminal window and stop Codex supervision after prompt handoff | Read-only or a Grok-created isolated worktree |
-| `grok_search` | Run Grok-native X/Web research outside the current repository | Private research directory |
+| `grok_search` | Run completion-checked Grok-native X/Web research outside the current repository | Temporary CWD plus tool restrictions; no OS sandbox |
 | `grok_search_list` / `grok_search_show` | List or read retained search answers | Read-only |
 | `grok_status` | Read lifecycle, elapsed time, plan, recent tool activity, and a public-response preview; optionally wait for a newer revision | Read-only |
 | `grok_result` | Read the public answer, optionally waiting briefly | Read-only |
@@ -185,7 +191,7 @@ While Grok is running, the skill asks Codex to use `grok_status` for incremental
 - the official Grok Build CLI, authenticated locally;
 - Git when using writing workers.
 
-Last verified environment (2026-08-03): macOS, Grok CLI `0.2.114`, plugin `0.4.0`, `grok-4.5`, and a browser-authenticated SuperGrok account. Isolated `grok_search` was live-verified the same day. The plugin also follows other authentication methods supported by the official CLI, including `XAI_API_KEY`, without implementing authentication itself.
+Local live checks on 2026-10-01 passed on macOS with Grok CLI `1.0.46`, plugin `0.4.1`, and requested model `grok-4.7`. The checks covered concurrent X searches, empty results, model rejection, structured output, MCP responsiveness, and synthetic local-file restrictions. The 0.4.2 completion contract and process cleanup also have deterministic executable-fixture tests. These local checks do not certify a published release or the separate project-agent route. The plugin follows authentication methods supported by the official CLI, including browser login and `XAI_API_KEY`, without reading or managing auth files itself.
 
 Official references: [Grok Build overview](https://docs.x.ai/build/overview), [Headless & ACP](https://docs.x.ai/build/cli/headless-scripting), and [CLI reference](https://docs.x.ai/build/cli/reference).
 
@@ -196,10 +202,10 @@ The plugin has no npm runtime dependencies and stores no credentials.
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `GROK_BIN` | Absolute path or command name for the official Grok CLI | `~/.grok/bin/grok`, then `grok` |
-| `GROK_MODEL` | Default Grok model ID | `grok-4.5` |
+| `GROK_MODEL` | Default managed-agent model ID | `grok-4.5` |
 | `GROK_PASSTHROUGH_ENV` | Comma-separated extra environment-variable names to pass to Grok | unset |
 
-The model can also be selected per agent. Grok receives a minimal system environment plus `XAI_API_KEY` when present. Other host variables are not inherited unless their names are explicitly listed in `GROK_PASSTHROUGH_ENV`.
+The model can also be selected per agent. `grok_search` separately defaults to `grok-4.7` and accepts per-call `model` and `max_turns` values without model fallback. Grok receives a minimal system environment plus `XAI_API_KEY` when present. Other host variables are not inherited unless their names are explicitly listed in `GROK_PASSTHROUGH_ENV`.
 
 ## Local development and tests
 
@@ -250,6 +256,7 @@ upgrade commands above.
 - Public answer text is bounded to prevent unbounded memory growth.
 - The bridge does not merge, commit, push, or delete worktrees.
 - Grok is an external ACP worker exposed through MCP, not a native Codex team subagent.
+- Search tool restrictions are not an OS sandbox, and native Grok configuration, hooks, or MCP initialization may still affect the CLI.
 - Grok CLI behavior, model names, and sandbox implementation may change. Pin or centrally manage Grok versions in sensitive environments.
 
 ## Acknowledgements

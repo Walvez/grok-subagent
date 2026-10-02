@@ -39,17 +39,23 @@ The MCP server has no third-party runtime dependencies. Each external agent owns
 
 The child process receives only a small system environment allowlist, supported Grok authentication variables, and variables explicitly named by the operator. Failed or timed-out sessions terminate their Grok process while retaining a bounded diagnostic summary.
 
-## Isolated search mode
+## Checked search mode
 
 `grok_search` is intentionally outside the managed ACP lifecycle. The bridge launches the official Grok CLI once with:
 
-- a private run directory under `~/.cache/grok-subagent/search-runs`;
-- temporary `HOME` / `GROK_HOME` values containing only a copied auth file and a minimal config;
-- tools limited to `x_search`, `web_search`, and `web_fetch`;
-- model pinned to `grok-4.5`;
-- no MCP, memory, plan mode, or nested subagents.
+- a fresh repository-free temporary working directory, separate from the retained cache under `~/.cache/grok-subagent/search-runs`;
+- the native `HOME`, CLI login, and Grok configuration discovery, without reading, copying, or persisting authentication files;
+- `x_search`, `web_search`, and `web_fetch`, plus explicit denials for local read, shell, edit, MCP, directory-listing, grep, replacement, and terminal tools;
+- selectable model and turn limits, defaulting to `grok-4.7` and six turns, with no model fallback;
+- `--no-auto-update`, closed stdin, no memory, and no nested subagents.
 
-The search bridge is adapted from the MIT-licensed `sudoHG/codex-grok-search` project and returns Grok's complete answer without content filtering. Codex remains responsible for framing the research task and synthesizing the final user-facing answer.
+Python owns the CLI deadline, process group, result classification, and version-2 cache manifest. Success requires CLI exit zero, one JSON object, `stopReason: "end_turn"`, nonblank Markdown, and no structured-output error. Exact Markdown is returned through a strict JSON envelope. Partial text from a failed run remains diagnostic and is never promoted to a result. Optional structured output is validated locally against a supplied local-only JSON Schema when the Python `jsonschema` package is available.
+
+Node transports the request asynchronously and validates only the outer success/failure contract, so MCP ping and unrelated calls remain responsive. On shutdown it gives Python bounded cleanup time before forcing the bridge process to exit. Python sends TERM and then KILL to the Grok process group when needed.
+
+The plugin manifest gives an MCP tool call 1,815 seconds before host transport cancellation. Search keeps its own deadline, up to 1,800 seconds, and the Node bridge reserves up to eight additional seconds for Python cleanup. The manifest limit is longer so transport does not preempt the owned cleanup path.
+
+The search bridge is adapted from the MIT-licensed `sudoHG/codex-grok-search` project. Tool restrictions and compatibility switches reduce local exposure but do not provide an operating-system sandbox or prove that native global Grok configuration did not load. Codex remains responsible for framing the research task and synthesizing the final user-facing answer.
 
 ## Interactive handoff mode
 
@@ -86,5 +92,7 @@ This is defense in depth, not a claim of perfect isolation. See [SECURITY.md](SE
 - 20 recent tool events;
 - 30-minute maximum prompt timeout;
 - 30-second maximum blocking result wait.
+- 180-second default search deadline and 16 MiB combined search-output limit.
+- 1,815-second MCP host tool timeout, covering the 1,800-second maximum search deadline and bridge cleanup.
 
 Closing the MCP server terminates all child Grok processes.

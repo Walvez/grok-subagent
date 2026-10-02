@@ -3,7 +3,8 @@
     "grok-subagent": {
       "command": "node",
       "args": ["./mcp-server/server.mjs"],
-      "cwd": "."
+      "cwd": ".",
+      "tool_timeout_sec": 1815
     }
   }
 }

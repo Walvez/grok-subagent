@@ -1,7 +1,7 @@
 {
   "name": "grok-subagent",
-  "version": "0.4.0",
-  "description": "Run authenticated Grok Build agents and isolated Grok-native X/web search from Codex.",
+  "version": "0.4.2",
+  "description": "Run authenticated Grok Build agents and checked, repository-free Grok-native X/web search from Codex.",
   "author": {
     "name": "Walvez"
   },
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Grok Subagent",
     "shortDescription": "Delegate coding work and real-time Grok search.",
-    "longDescription": "Let Codex start, steer, inspect, cancel, and close authenticated Grok Build ACP sessions, and run isolated Grok-native X/Reddit/web research outside the current repository.",
+    "longDescription": "Let Codex start, steer, inspect, cancel, and close authenticated Grok Build ACP sessions, and run checked Grok-native X/Reddit/web research outside the current repository.",
     "developerName": "Walvez",
     "category": "Productivity",
     "capabilities": [

@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here.
 
+## 0.4.2 - 2026-10-01
+
+### Fixed
+
+- Search success now requires one valid Grok JSON envelope, exit code zero, `stopReason: "end_turn"`, and nonblank Markdown. Cancelled, malformed, empty, and nonzero results are retained as failed diagnostics instead of being reported as complete.
+- The MCP search bridge now uses asynchronous child processes, keeps ping and other requests responsive, and rejects contradictions between the Python result envelope and process exit status.
+- Search timeout, MCP stdin close, SIGINT, and SIGTERM now terminate the owned Grok process group with bounded TERM/KILL cleanup.
+- The plugin MCP manifest now allows 1,815 seconds per tool call so a maximum 1,800-second search can finish its bounded bridge cleanup before the host cancels transport.
+- Process-group cleanup now retries transient macOS permission errors briefly and accepts them only once the group is confirmed absent. Persistent permission errors remain explicit failures.
+
+### Changed
+
+- Search defaults to selectable `grok-4.7`, six turns, and a 180-second deadline without model fallback.
+- Search runs use the CLI's native login, a fresh repository-free working directory, explicit public-search tools, explicit local-tool denials, closed stdin, and `--no-auto-update`.
+- Version-2 cache manifests distinguish verified completion from failed and legacy unverified runs. Exact Markdown is preserved; partial text is diagnostic only.
+- Optional structured results accept a local-only JSON Schema and use the optional Python `jsonschema` package for full local validation.
+
+### Security
+
+- Search no longer reads, copies, or persists Grok authentication files and does not replace `HOME` or `GROK_HOME`.
+- Search tool restrictions and compatibility environment switches reduce local exposure but are not an operating-system sandbox. Native Grok configuration may still load.
+
 ## 0.4.0 - 2026-08-03
 
 ### Added

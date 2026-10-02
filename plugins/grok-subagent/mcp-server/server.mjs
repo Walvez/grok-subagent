@@ -2,18 +2,20 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, lstatSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.2";
 const MAX_AGENTS = 3;
 const MAX_RETAINED_FAILED_AGENTS = 3;
 const MAX_TEXT = 120_000;
 const MAX_STDERR = 12_000;
 const CANCEL_TIMEOUT_MS = 10_000;
+const MAX_SEARCH_BRIDGE_OUTPUT = 16 * 1024 * 1024;
+const SEARCH_BRIDGE_GRACE_MS = 5_000;
 const SUPPORTED_MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const CHILD_ENV_KEYS = [
   "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
@@ -25,6 +27,8 @@ const CHILD_ENV_KEYS = [
   "__CF_USER_TEXT_ENCODING", "XAI_API_KEY"
 ];
 const agents = new Map();
+const searchBridges = new Set();
+let shutdownPromise = null;
 
 const TOOL_DEFINITIONS = [
   {
@@ -82,7 +86,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "grok_search",
-    description: "Run an isolated Grok 4.5 research task with X Search, web search, and web fetch from a private directory outside the current repository. Use for X/Twitter, Reddit, community sentiment, and real-time public research.",
+    description: "Run a checked Grok public-search task from a temporary directory outside the current repository. Tool restrictions reduce local access but are not an OS sandbox.",
     inputSchema: {
       type: "object",
       properties: {
@@ -92,7 +96,10 @@ const TOOL_DEFINITIONS = [
         since: { type: "string", description: "Optional relative window such as 24h, 7d, 2w, or an ISO-8601 start timestamp." },
         until: { type: "string", description: "Optional ISO-8601 end timestamp. Defaults to now." },
         keep_run: { type: "boolean", description: "Pin this run so cleanup does not delete it." },
-        timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 600 }
+        model: { type: "string", description: "Exact Grok model ID. Defaults to grok-4.7. No fallback is used." },
+        max_turns: { type: "integer", minimum: 1, default: 6 },
+        json_schema: { type: "object", description: "Optional local-only JSON Schema for structured output." },
+        timeout_seconds: { type: "integer", minimum: 30, maximum: 1800, default: 180 }
       },
       required: ["query"],
       additionalProperties: false
@@ -661,69 +668,160 @@ function searchScriptPath() {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "run_search.py");
 }
 
-function runSearchBridge(args) {
-  const script = searchScriptPath();
-  const result = spawnSync("python3", [script, ...args], {
-    encoding: "utf8",
-    timeout: 1_860_000,
-    env: buildChildEnv(),
-    maxBuffer: 16 * 1024 * 1024
-  });
-  if (result.error) throw result.error;
-  const stdout = String(result.stdout || "").trim();
-  const stderr = String(result.stderr || "").trim();
-  let payload = null;
-  if (stdout) {
-    try { payload = JSON.parse(stdout); }
-    catch {
-      // Prefer the last JSON object if the bridge printed anything else first.
-      const match = stdout.match(/\{[\s\S]*\}\s*$/);
-      if (match) {
-        try { payload = JSON.parse(match[0]); } catch {}
-      }
-    }
-  }
-  if (payload && typeof payload === "object") {
-    if (stderr) payload.bridge_stderr = cleanText(stderr).slice(-2000);
-    return payload;
-  }
-  throw new Error(cleanText(stderr || stdout || `Search bridge exited with code ${result.status}`));
+function signalSearchBridge(state, signal) {
+  if (state.closed || state.child.exitCode !== null || state.child.signalCode !== null) return;
+  try { state.child.kill(signal); } catch {}
 }
 
-function callSearch(args = {}) {
+async function stopSearchBridge(state) {
+  signalSearchBridge(state, "SIGTERM");
+  const closed = await waitForSearchBridgeClose(state, SEARCH_BRIDGE_GRACE_MS);
+  if (!closed) {
+    signalSearchBridge(state, "SIGKILL");
+    await waitForSearchBridgeClose(state, 1_000);
+  }
+}
+
+function waitForSearchBridgeClose(state, timeoutMilliseconds) {
+  return new Promise(resolvePromise => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(value);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMilliseconds);
+    timer.unref();
+    state.closedPromise.then(() => finish(true));
+  });
+}
+
+function validateSearchBridgePayload(payload, exitCode, expected) {
+  if (expected === "list") {
+    if (exitCode !== 0 || !Array.isArray(payload)) throw new Error("Search list bridge returned an invalid response.");
+    return payload;
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || typeof payload.ok !== "boolean") {
+    throw new Error("Search bridge returned an invalid response envelope.");
+  }
+  if (payload.ok === true) {
+    if (exitCode !== 0 || payload.status !== "complete" || typeof payload.result !== "string" || !payload.diagnostics || typeof payload.diagnostics !== "object") {
+      throw new Error("Search bridge success contradicted its process result.");
+    }
+  } else if (exitCode === 0 || payload.status !== "failed" || typeof payload.error !== "string") {
+    throw new Error("Search bridge failure contradicted its process result.");
+  }
+  return payload;
+}
+
+function runSearchBridge(args, { timeoutSeconds = 30, expected = "outcome" } = {}) {
+  const script = searchScriptPath();
+  return new Promise((resolvePromise, rejectPromise) => {
+    const env = buildChildEnv();
+    if (process.env.GROK_BIN) env.GROK_BIN = process.env.GROK_BIN;
+    if (process.env.GROK_HOME) env.GROK_HOME = process.env.GROK_HOME;
+    const child = spawn("python3", [script, ...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let resolveClosed;
+    const state = {
+      child,
+      closed: false,
+      closedPromise: new Promise(resolvePromise => { resolveClosed = resolvePromise; })
+    };
+    searchBridges.add(state);
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let transportError = null;
+    let cleanupTimer = null;
+    const stopAfterError = error => {
+      if (!transportError) transportError = error;
+      signalSearchBridge(state, "SIGTERM");
+      if (!cleanupTimer) {
+        cleanupTimer = setTimeout(() => signalSearchBridge(state, "SIGKILL"), SEARCH_BRIDGE_GRACE_MS);
+        cleanupTimer.unref();
+      }
+    };
+    const deadlineTimer = setTimeout(() => {
+      stopAfterError(new Error("Search bridge exceeded its cleanup deadline."));
+    }, Math.max(1, timeoutSeconds) * 1000);
+    deadlineTimer.unref();
+
+    const collect = target => chunk => {
+      outputBytes += chunk.length;
+      if (outputBytes > MAX_SEARCH_BRIDGE_OUTPUT) {
+        stopAfterError(new Error("Search bridge output exceeded 16 MiB."));
+        return;
+      }
+      target.push(chunk);
+    };
+    child.stdout.on("data", collect(stdout));
+    child.stderr.on("data", collect(stderr));
+    child.on("error", error => { transportError = error; });
+    child.on("close", (code, signal) => {
+      state.closed = true;
+      clearTimeout(deadlineTimer);
+      if (cleanupTimer) clearTimeout(cleanupTimer);
+      searchBridges.delete(state);
+      resolveClosed();
+      if (transportError) {
+        rejectPromise(transportError);
+        return;
+      }
+      const stdoutText = Buffer.concat(stdout).toString("utf8");
+      const stderrText = Buffer.concat(stderr).toString("utf8");
+      let payload;
+      try { payload = JSON.parse(stdoutText); }
+      catch {
+        rejectPromise(new Error(cleanText(stderrText || stdoutText || `Search bridge exited with ${signal || code}`)));
+        return;
+      }
+      try { resolvePromise(validateSearchBridgePayload(payload, code, expected)); }
+      catch (error) { rejectPromise(error); }
+    });
+  });
+}
+
+async function callSearch(args = {}) {
   if (typeof args.query !== "string" || !args.query.trim()) throw new Error("query is required.");
   if (args.query.length > MAX_TEXT) throw new Error(`query must be at most ${MAX_TEXT} characters.`);
   const platform = args.platform || "auto";
   if (!["auto", "x", "reddit", "web"].includes(platform)) throw new Error("platform must be auto, x, reddit, or web.");
   const depth = args.depth || "quick";
   if (!["quick", "deep"].includes(depth)) throw new Error("depth must be quick or deep.");
+  const model = args.model ?? "grok-4.7";
+  if (typeof model !== "string" || !model.trim()) throw new Error("model must be a nonblank string.");
+  const maxTurns = args.max_turns ?? 6;
+  if (!Number.isInteger(maxTurns) || maxTurns < 1) throw new Error("max_turns must be a positive integer.");
+  if (args.json_schema !== undefined && (!args.json_schema || typeof args.json_schema !== "object" || Array.isArray(args.json_schema))) {
+    throw new Error("json_schema must be an object.");
+  }
+  const timeoutSeconds = clamp(args.timeout_seconds, 30, 1800, 180);
   const command = [
     "run",
     "--platform", platform,
     "--depth", depth,
-    "--timeout", String(clamp(args.timeout_seconds, 30, 1800, 600)),
+    "--timeout", String(timeoutSeconds),
+    "--model", model,
+    "--max-turns", String(maxTurns),
     "--retention-days", "7"
   ];
   if (typeof args.since === "string" && args.since.trim()) command.push("--since", args.since.trim());
   if (typeof args.until === "string" && args.until.trim()) command.push("--until", args.until.trim());
   if (args.keep_run === true) command.push("--keep-run");
-  command.push(args.query);
-  const payload = runSearchBridge(command);
-  if (payload.ok === true && typeof payload.result_path === "string") {
-    try {
-      payload.result = cleanText(readFileSync(payload.result_path, "utf8"));
-    } catch (error) {
-      payload.result_read_error = cleanText(error?.message || error);
-    }
-  }
-  return payload;
+  if (args.json_schema !== undefined) command.push("--json-schema", JSON.stringify(args.json_schema));
+  command.push("--", args.query);
+  return runSearchBridge(command, { timeoutSeconds: timeoutSeconds + 8 });
 }
 
-function listSearchRuns() {
-  return runSearchBridge(["list"]);
+async function listSearchRuns() {
+  return runSearchBridge(["list"], { expected: "list" });
 }
 
-function showSearchRun(args = {}) {
+async function showSearchRun(args = {}) {
   if (typeof args.run_id !== "string" || !args.run_id.trim()) throw new Error("run_id is required.");
   return runSearchBridge(["show", args.run_id.trim()]);
 }
@@ -814,11 +912,23 @@ function startMcpServer() {
       sendMcp({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: cleanText(error?.message || error) } });
     }
   });
-  input.on("close", shutdown);
+  input.on("close", () => { void shutdown(); });
   return input;
 }
 
-function shutdown() {
+async function shutdown() {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    const closingBridges = [...searchBridges];
+    await Promise.all(closingBridges.map(stopSearchBridge));
+    for (const agent of agents.values()) agent.close();
+    agents.clear();
+  })();
+  return shutdownPromise;
+}
+
+function forceShutdown() {
+  for (const bridge of searchBridges) signalSearchBridge(bridge, "SIGKILL");
   for (const agent of agents.values()) agent.close();
   agents.clear();
 }
@@ -852,7 +962,13 @@ try {
 
 if (isMainModule) {
   startMcpServer();
-  process.on("SIGINT", () => { shutdown(); process.exit(0); });
-  process.on("SIGTERM", () => { shutdown(); process.exit(0); });
-  process.on("exit", shutdown);
+  let exiting = false;
+  const exitAfterShutdown = code => {
+    if (exiting) return;
+    exiting = true;
+    void shutdown().finally(() => process.exit(code));
+  };
+  process.on("SIGINT", () => exitAfterShutdown(130));
+  process.on("SIGTERM", () => exitAfterShutdown(143));
+  process.on("exit", forceShutdown);
 }

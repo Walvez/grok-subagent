@@ -45,7 +45,7 @@ The bridge asks the official Grok CLI to use its advertised `cached_token` metho
 
 ## Dependency and process model
 
-The MCP server uses only Node.js standard-library modules. Grok is launched with argument arrays rather than shell command interpolation. All child processes are terminated when the bridge shuts down, with a forced-kill fallback.
+The MCP server uses only Node.js standard-library modules. Markdown search does not require a Python package; optional structured-result validation requires `jsonschema`. Grok is launched with argument arrays rather than shell command interpolation. Search stdin is closed, output is bounded, deadlines are monotonic, and the owned process group receives TERM followed by KILL when cleanup requires escalation. The MCP bridge awaits bounded search cleanup during stdin close, SIGINT, and SIGTERM.
 
 ## Interactive handoff boundary
 
@@ -53,9 +53,10 @@ Interactive handoff is macOS-only and opens the official Grok TUI in a separate 
 
 The initial prompt is passed through a mode-0600 temporary file that the Terminal command removes before starting Grok. The prompt is sanitized but still leaves the machine for xAI under the user's Grok plan and policies. Do not use interactive handoff for secrets or unrelated personal data.
 
-## Isolated search boundary
+## Search boundary
 
-Search mode deliberately avoids launching Grok from the user's current project or Git worktree. The bridge creates a private research directory, copies only the local Grok auth file into a temporary home, and disables compatibility imports of Codex/Claude/Cursor skills, rules, agents, MCP servers, hooks, and sessions.
+Search mode deliberately avoids launching Grok from the user's current project or Git worktree. Each invocation uses a fresh temporary working directory while retained prompts, results, and private diagnostics stay under `~/.cache/grok-subagent/search-runs`. The bridge leaves native `HOME`, `GROK_HOME`, and CLI authentication discovery intact. It does not read, copy, or persist Grok authentication files.
 
-This reduces the chance that a research task packages or inspects the active codebase. It is not a local model and does not eliminate transmission of the user query or public search results to xAI. Treat returned web, X, and Reddit content as untrusted data.
+The command enables only the public search and fetch tools, explicitly denies known local read, shell, edit, MCP, listing, grep, replacement, and terminal tools, disables memory and subagents, and sets compatibility environment switches that request suppression of imported Cursor and Claude integrations. These controls are not an operating-system sandbox and do not prove that all native global Grok configuration, hooks, or MCP initialization is absent.
 
+Successful output must pass the version-2 completion contract. Failed and cancelled text is retained only as a private diagnostic artifact; legacy cache entries are shown as unverified. This reduces false-success risk but does not verify the truth of external content. Queries and retrieved public content still pass through xAI, and returned web, X, and Reddit content remains untrusted data.

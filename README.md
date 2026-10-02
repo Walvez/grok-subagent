@@ -97,7 +97,11 @@ flowchart LR
 并说明哪些是高互动原帖。不要只做普通网页搜索。
 ```
 
-`grok_search` 会在仓库外的私有目录中启动 Grok 4.5，只开放 `x_search`、`web_search` 和 `web_fetch`，并把完整答案交回 Codex。
+`grok_search` 默认使用可显式选择的 Grok 4.7，在仓库外的新临时工作目录中运行，只启用 `x_search`、`web_search` 和 `web_fetch`，并显式拒绝已知本地读取、Shell、编辑和 MCP 工具。只有 CLI 正常退出、返回单一 JSON 对象、以 `end_turn` 结束且包含非空 Markdown 时，结果才会标记成功；原始 Markdown 会逐字保留。工具限制不是操作系统沙箱，原生 Grok 全局配置仍可能加载。
+
+插件清单将 MCP 工具传输超时设为 1815 秒。这个宿主层上限高于搜索允许的 1800 秒最大 deadline，并为 Bridge 最长 8 秒的清理留出余量；它不会改变每次搜索自身的 `timeout_seconds`。
+
+需要机器可读结果时，可以传入 `json_schema`。Bridge 会在调用前拒绝远程或文件引用，并使用可选的 Python `jsonschema` 包在本地校验完整结果。普通 Markdown 搜索不需要该依赖。
 
 ### 独立排查故障
 
@@ -135,6 +139,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | 只读调查 | Grok `read-only` 沙箱 | 任意可读的绝对目录 | Codex 核验文件、命令和结论 |
 | 写入 Worker | Grok `workspace` 沙箱，仅限 linked worktree | 用户明确授权，且 Bridge 通过 worktree 检查 | Codex 检查 diff 并重新运行测试 |
+| 公开搜索 | 仓库外临时 CWD + 工具限制，不是 OS 沙箱 | 原生 Grok CLI 登录 | Codex 核验来源和结论 |
 
 重要边界：
 
@@ -145,6 +150,7 @@ flowchart LR
 - 只读沙箱阻止项目写入，但 Grok 仍可写入 `~/.grok` 和临时目录；macOS 上不能把它视为离线网络隔离；
 - 两个模型得出相同结论不等于事实已经验证，仓库内容也可能包含提示注入；
 - Bridge 不保存思维链，只在内存中保留有长度限制的公开回答、计划、工具名称/状态和脱敏错误。
+- 搜索沿用原生 `HOME` 和 Grok 登录发现，不读取、复制或持久化认证文件；失败或取消时的文本只作为私有诊断，不能作为成功结果。
 
 在私有代码上使用前，请阅读 [SECURITY.md](SECURITY.md)。
 
@@ -155,7 +161,7 @@ flowchart LR
 | `grok_spawn_readonly` | 启动独立调查、审查或方案分析 | Grok `read-only` 沙箱 |
 | `grok_spawn_worker` | 在获批的 linked worktree 中执行实现任务 | Grok `workspace` 沙箱 + Bridge 检查 |
 | `grok_handoff_interactive` | 在新的 macOS Terminal 窗口打开可交互 Grok TUI，Codex 完成 prompt 移交后不再监督 | 只读或 Grok 创建的隔离 worktree |
-| `grok_search` | 在仓库外运行 Grok 原生 X/Web 搜索并返回完整答案 | 私有 research 目录，不进入当前仓库 |
+| `grok_search` | 在仓库外运行经过完成状态检查的 Grok 原生 X/Web 搜索 | 临时 CWD + 工具限制；不是 OS 沙箱 |
 | `grok_search_list` / `grok_search_show` | 列出或读取保留的搜索结果 | 只读 |
 | `grok_status` | 查看生命周期、运行时长、计划、最近工具活动和公开回答片段；支持按进度版本等待增量 | 只读 |
 | `grok_result` | 获取公开回答，可短暂等待当前轮次完成 | 只读 |
@@ -184,7 +190,7 @@ Grok 运行期间，Skill 会让 Codex 用 `grok_status` 做最长 30 秒的增�
 - 已安装并登录官方 Grok Build CLI；
 - 写入模式需要 Git。
 
-最近验证环境（2026-08-03）：macOS、Grok CLI `0.2.114`、插件 `0.4.0`、`grok-4.5`，以及通过浏览器登录的 SuperGrok 账号。同日已 live 验证隔离式 `grok_search`。插件也沿用官方 CLI 支持的其他认证方式，例如 `XAI_API_KEY`，但不会自行处理认证流程。
+2026-10-01 的本地 live 检查在 macOS、Grok CLI `1.0.46`、插件 `0.4.1` 和请求模型 `grok-4.7` 下通过，覆盖并行 X 搜索、空结果、模型拒绝、结构化输出、MCP 响应性和合成文件访问限制。`0.4.2` 的搜索完成契约与进程清理也有可执行假 CLI 的确定性测试。这些本地检查不代表已发布版本或独立项目 Agent 路径的认证。插件沿用官方 CLI 支持的认证方式，例如浏览器登录或 `XAI_API_KEY`，但不会自行读取或管理认证文件。
 
 官方参考：[Grok Build](https://docs.x.ai/build/overview)、[ACP 与无头模式](https://docs.x.ai/build/cli/headless-scripting)、[CLI 参数](https://docs.x.ai/build/cli/reference)。
 
@@ -195,10 +201,10 @@ Grok 运行期间，Skill 会让 Codex 用 `grok_status` 做最长 30 秒的增�
 | 环境变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `GROK_BIN` | 官方 Grok CLI 的路径或命令名 | `~/.grok/bin/grok`，然后尝试 `grok` |
-| `GROK_MODEL` | 默认模型 ID | `grok-4.5` |
+| `GROK_MODEL` | Managed Agent 默认模型 ID | `grok-4.5` |
 | `GROK_PASSTHROUGH_ENV` | 需要额外传给 Grok 的环境变量名，用逗号分隔 | 未设置 |
 
-每次启动 Grok Agent 时也可以单独指定模型。Grok 默认只继承最小系统环境，以及存在时的 `XAI_API_KEY`；其他宿主变量不会自动继承，除非变量名被明确写入 `GROK_PASSTHROUGH_ENV`。
+每次启动 Grok Agent 时也可以单独指定模型。`grok_search` 独立默认使用 `grok-4.7`，并支持每次调用指定 `model` 和 `max_turns`，不会自动回退到其他模型。Grok 默认只继承最小系统环境，以及存在时的 `XAI_API_KEY`；其他宿主变量不会自动继承，除非变量名被明确写入 `GROK_PASSTHROUGH_ENV`。
 
 ## 本地开发与测试
 
@@ -248,6 +254,7 @@ codex plugin add grok-subagent@walvez-grok
 - 回答文本有长度上限，避免无限占用内存；
 - 插件不会自动提交、合并、推送或删除 worktree；
 - Grok 是通过 ACP/MCP 接入的外部 Agent，不是 Codex 内部原生团队 Agent；
+- 搜索模式的工具限制不是 OS 沙箱，并且原生 Grok 配置、Hook 或 MCP 初始化仍可能影响 CLI；
 - Grok CLI、模型名和沙箱行为未来可能改变，高安全环境应固定并集中管理 Grok 版本。
 
 ## 致谢
